@@ -14,7 +14,8 @@ const TAG_OPTIONS = [
 ];
 
 export default function ProfileScreen() {
-  const { theme, isDarkMode, toggleTheme, goals, activeGoalId, subjects } = useStudy();
+  // Added exportData and importData to destructuring
+  const { theme, isDarkMode, toggleTheme, goals, activeGoalId, subjects, exportData, importData } = useStudy();
 
   // --- STATE ---
   const [name, setName] = useState("Student");
@@ -193,6 +194,33 @@ export default function ProfileScreen() {
                 </View>
                 <Text style={[styles.settingText, { color: '#EF4444' }]}>Reset All Data</Text>
             </View>
+        </TouchableOpacity>
+      </View>
+
+      {/* DATA & STORAGE (NEW SECTION) */}
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: theme.text }]}>Data & Backup</Text>
+
+        {/* Export Data */}
+        <TouchableOpacity style={[styles.settingRow, { backgroundColor: theme.card }]} onPress={exportData}>
+            <View style={{flexDirection:'row', alignItems:'center'}}>
+                <View style={[styles.iconBox, { backgroundColor: '#DBEAFE' }]}>
+                    <Ionicons name="cloud-upload" size={20} color="#3B82F6" />
+                </View>
+                <Text style={[styles.settingText, { color: theme.text }]}>Export Backup</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={theme.textLight} />
+        </TouchableOpacity>
+
+        {/* Import Data */}
+        <TouchableOpacity style={[styles.settingRow, { backgroundColor: theme.card }]} onPress={importData}>
+            <View style={{flexDirection:'row', alignItems:'center'}}>
+                <View style={[styles.iconBox, { backgroundColor: '#FEF3C7' }]}>
+                    <Ionicons name="cloud-download" size={20} color="#D97706" />
+                </View>
+                <Text style={[styles.settingText, { color: theme.text }]}>Import Backup</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={theme.textLight} />
         </TouchableOpacity>
       </View>
       

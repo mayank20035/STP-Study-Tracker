@@ -1,6 +1,11 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { subDays, format } from 'date-fns';
+import { subDays, format, isAfter, parseISO } from 'date-fns';
+import { Alert } from 'react-native';
+// --- FIX: IMPORT FROM LEGACY TO SOLVE CRASH ---
+import * as FileSystem from 'expo-file-system/legacy'; 
+import * as Sharing from 'expo-sharing';
+import * as DocumentPicker from 'expo-document-picker';
 
 export const APP_THEME = {
   light: { id: 'light', background: '#F3F4F6', card: '#FFFFFF', text: '#1F2937', textLight: '#6B7280', primary: '#4F46E5', secondary: '#E0E7FF', danger: '#EF4444', gold: '#FFD700', border: '#E5E7EB', inputBg: '#FFFFFF', success: '#10B981' },
@@ -43,8 +48,10 @@ type StudyContextType = {
   toggleChapterHidden: (sId: number, cId: string) => void; 
   updateSubjectCategory: (id: number, category: string) => void; 
   addNewCategory: (category: string) => void;
-  deleteCategory: (category: string) => void; // <--- NEW
-  editCategory: (oldName: string, newName: string) => void; // <--- NEW
+  deleteCategory: (category: string) => void;
+  editCategory: (oldName: string, newName: string) => void;
+  exportData: () => Promise<void>; 
+  importData: () => Promise<void>; 
   getTodayKey: () => string; getDailyTotal: () => number; isAnyTimerRunning: boolean;
 };
 
@@ -104,20 +111,14 @@ export function StudyProvider({ children }: { children: React.ReactNode }) {
       setCategories(prev => [...prev, category]);
   };
 
-  // --- NEW: DELETE CATEGORY ---
   const deleteCategory = (categoryName: string) => {
-      // 1. Remove from list
       setCategories(prev => prev.filter(c => c !== categoryName));
-      // 2. Remove from any subjects that had it
       setSubjects(prev => prev.map(s => s.category === categoryName ? { ...s, category: '' } : s));
   };
 
-  // --- NEW: EDIT CATEGORY ---
   const editCategory = (oldName: string, newName: string) => {
       if (!newName || categories.includes(newName)) return;
-      // 1. Update list
       setCategories(prev => prev.map(c => c === oldName ? newName : c));
-      // 2. Update subjects
       setSubjects(prev => prev.map(s => s.category === oldName ? { ...s, category: newName } : s));
   };
 
@@ -132,6 +133,72 @@ export function StudyProvider({ children }: { children: React.ReactNode }) {
               })
           };
       }));
+  };
+
+  // --- EXPORT FUNCTION ---
+  const exportData = async () => {
+    try {
+        const isAvailable = await Sharing.isAvailableAsync();
+        if (!isAvailable) {
+            Alert.alert("Error", "Sharing is not available on this device.");
+            return;
+        }
+
+        const data = {
+            subjects,
+            logs,
+            goals,
+            categories,
+            activeGoalId,
+            isDarkMode,
+            timestamp: new Date().toISOString(),
+            version: '1.1.0'
+        };
+
+        const fileUri = FileSystem.documentDirectory + 'STP_Backup.json';
+        await FileSystem.writeAsStringAsync(fileUri, JSON.stringify(data));
+
+        await Sharing.shareAsync(fileUri, {
+            mimeType: 'application/json',
+            dialogTitle: 'Save STP Backup',
+            UTI: 'public.json'
+        });
+    } catch (error) {
+        Alert.alert("Export Failed", `Reason: ${error}`);
+    }
+  };
+
+  // --- IMPORT FUNCTION ---
+  const importData = async () => {
+    try {
+        const result = await DocumentPicker.getDocumentAsync({ type: 'application/json' });
+        
+        if (result.assets && result.assets[0]) {
+            const fileContent = await FileSystem.readAsStringAsync(result.assets[0].uri);
+            const parsed = JSON.parse(fileContent);
+
+            if (!parsed.subjects || !parsed.logs || !parsed.categories) {
+                Alert.alert("Invalid File", "This file does not contain valid STP data.");
+                return;
+            }
+
+            setSubjects(parsed.subjects);
+            setLogs(parsed.logs);
+            setGoals(parsed.goals);
+            setCategories(parsed.categories);
+            setActiveGoalId(parsed.activeGoalId);
+            setIsDarkMode(parsed.isDarkMode);
+
+            await AsyncStorage.setItem('@study_data', JSON.stringify(parsed.subjects));
+            await AsyncStorage.setItem('@study_logs', JSON.stringify(parsed.logs));
+            await AsyncStorage.setItem('@user_categories', JSON.stringify(parsed.categories));
+            await AsyncStorage.setItem('@user_goals', JSON.stringify(parsed.goals));
+            
+            Alert.alert("Success", "Data imported successfully!");
+        }
+    } catch (error) {
+        Alert.alert("Import Failed", "Could not read the file.");
+    }
   };
 
   const checkDailyBadges = async (currentSubjects: Subject[]) => {
@@ -152,6 +219,20 @@ export function StudyProvider({ children }: { children: React.ReactNode }) {
         await AsyncStorage.setItem('@last_badge_check', today);
         await AsyncStorage.setItem('@study_data', JSON.stringify(updatedSubjects));
     }
+  };
+
+  const pruneOldLogs = (currentLogs: DailyLog) => {
+      const cutoffDate = subDays(new Date(), 30);
+      const newLogs: DailyLog = {};
+      let changed = false;
+      Object.keys(currentLogs).forEach(dateStr => {
+          if (isAfter(parseISO(dateStr), cutoffDate)) {
+              newLogs[dateStr] = currentLogs[dateStr];
+          } else {
+              changed = true;
+          }
+      });
+      return changed ? newLogs : currentLogs;
   };
 
   useEffect(() => {
@@ -192,7 +273,13 @@ export function StudyProvider({ children }: { children: React.ReactNode }) {
                 setHomeFilterIds(loadedSubjects.map((s: any) => s.id));
             }
         }
-        if (log) setLogs(JSON.parse(log));
+
+        if (log) {
+            const parsedLogs = JSON.parse(log);
+            const prunedLogs = pruneOldLogs(parsedLogs); 
+            setLogs(prunedLogs);
+        }
+
         if (thm) setIsDarkMode(JSON.parse(thm));
         if (gol) setGoals(JSON.parse(gol));
         if (act) setActiveGoalId(act);
@@ -300,7 +387,8 @@ export function StudyProvider({ children }: { children: React.ReactNode }) {
       setActiveGoalId, addGoal, updateGoal, deleteGoal, toggleTheme,
       addSubject, updateSubject, deleteSubject, addChapter, updateChapterName, deleteChapter, toggleChapterTimer,
       toggleHomeFilter, moveSubject, updateSubjectNote, toggleChapterHidden, updateSubjectCategory, addNewCategory, 
-      deleteCategory, editCategory, // <--- EXPORTED
+      deleteCategory, editCategory, 
+      exportData, importData, 
       getTodayKey, getDailyTotal
     }}>
       {children}

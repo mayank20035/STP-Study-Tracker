@@ -12,7 +12,7 @@ const screenWidth = Dimensions.get('window').width;
 type FilterType = '1W' | '1M' | '1Y';
 
 export default function GrowthScreen() {
-  const { logs, theme, getTodayKey, activeGoalId, goals, subjects, homeFilterIds } = useStudy(); // <--- GLOBAL FILTER
+  const { logs, theme, getTodayKey, activeGoalId, goals, subjects, homeFilterIds } = useStudy(); 
   
   const [tick, setTick] = useState(0);
   useEffect(() => { 
@@ -24,7 +24,6 @@ export default function GrowthScreen() {
   const [calendarVisible, setCalendarVisible] = useState(false);
   const [selectedDate, setSelectedDate] = useState(getTodayKey());
   
-  // --- LOCAL FILTER FOR CHAPTER RANKINGS ONLY ---
   const [leaderboardFilterVisible, setLeaderboardFilterVisible] = useState(false);
   const [selectedLeaderboardIds, setSelectedLeaderboardIds] = useState<number[]>([]);
 
@@ -41,10 +40,9 @@ export default function GrowthScreen() {
     });
   };
 
-  // --- RING CHART: USES GLOBAL HOME FILTER ---
   const filteredTotalMs = useMemo(() => {
     return subjects.reduce((acc, sub) => {
-        if (homeFilterIds.includes(sub.id)) { // <--- Using Global Filter
+        if (homeFilterIds.includes(sub.id)) { 
             const subMs = sub.chapters.reduce((cAcc, chap) => {
                 const active = (chap.isRunning && chap.lastStartTime) ? (Date.now() - chap.lastStartTime) : 0;
                 return cAcc + chap.timeSpent + active;
@@ -61,11 +59,10 @@ export default function GrowthScreen() {
   const progressPercent = targetHours > 0 ? Math.min(filteredTotalHours / targetHours, 1) : 0;
   const progressData = { labels: ["Total"], data: [progressPercent] };
 
-  // --- CHAPTER RANKINGS: USES LOCAL FILTER ---
   const rankedChapters = useMemo(() => {
     const allChapters: any[] = [];
     subjects.forEach(sub => {
-        if (selectedLeaderboardIds.includes(sub.id)) { // <--- Using Local Filter
+        if (selectedLeaderboardIds.includes(sub.id)) { 
             sub.chapters.forEach(chap => {
                 const active = (chap.isRunning && chap.lastStartTime) ? (Date.now() - chap.lastStartTime) : 0;
                 allChapters.push({
@@ -80,21 +77,28 @@ export default function GrowthScreen() {
     return allChapters.sort((a, b) => b.timeSpent - a.timeSpent);
   }, [subjects, selectedLeaderboardIds, tick]);
 
-  const chartData = useMemo(() => {
+  // --- CHART DATA ENGINE ---
+  const chartDataInfo = useMemo(() => {
     const labels: string[] = [];
     const data: number[] = [];
     const today = new Date();
+    let totalPeriodHours = 0;
+    let daysCount = 0;
 
     if (filter === '1W') {
+      daysCount = 7;
       for (let i = 6; i >= 0; i--) {
         const d = new Date();
         d.setDate(today.getDate() - i);
         const key = d.toISOString().split('T')[0];
+        const val = logs[key] ? logs[key] / 3600000 : 0;
         labels.push(d.toLocaleDateString('en-US', { weekday: 'short' }));
-        data.push(logs[key] ? logs[key] / 3600000 : 0);
+        data.push(val);
+        totalPeriodHours += val;
       }
     } 
     else if (filter === '1M') {
+      daysCount = 28; // Approx 4 weeks
       for (let i = 3; i >= 0; i--) {
         let weeklySum = 0;
         const startDay = i * 7; 
@@ -104,11 +108,14 @@ export default function GrowthScreen() {
             const key = d.toISOString().split('T')[0];
             weeklySum += (logs[key] || 0);
         }
+        const val = weeklySum / 3600000;
         labels.push(`W${4 - i}`);
-        data.push(weeklySum / 3600000);
+        data.push(val);
+        totalPeriodHours += val;
       }
     } 
     else if (filter === '1Y') {
+      daysCount = 180; // Approx 6 months
       for (let i = 5; i >= 0; i--) {
         const d = new Date();
         d.setMonth(today.getMonth() - i);
@@ -116,11 +123,24 @@ export default function GrowthScreen() {
         const monthlySum = Object.keys(logs)
             .filter(key => key.startsWith(monthKey))
             .reduce((sum, key) => sum + logs[key], 0);
+        const val = monthlySum / 3600000;
         labels.push(d.toLocaleDateString('en-US', { month: 'short' }));
-        data.push(monthlySum / 3600000);
+        data.push(val);
+        totalPeriodHours += val;
       }
     }
-    return { labels, datasets: [{ data }] };
+
+    // Calculate Average
+    const average = totalPeriodHours / (filter === '1W' ? 7 : filter === '1M' ? 30 : 180); // Divider based on days approx
+
+    // Calculate Trophy Data (Top 3 Highest Points in this period)
+    const sortedData = [...data].sort((a, b) => b - a).slice(0, 3);
+
+    return { 
+        chart: { labels, datasets: [{ data }] },
+        average: average,
+        top3: sortedData
+    };
   }, [filter, logs]);
 
   const getDayStyle = (ms: number) => {
@@ -189,8 +209,10 @@ export default function GrowthScreen() {
         <Text style={[styles.headerValue, { color: theme.text }]}>Consistency</Text>
       </View>
 
-      {/* LINE CHART */}
+      {/* LINE CHART & AVERAGE */}
       <View style={[styles.card, { backgroundColor: theme.card }]}>
+        
+        {/* Header Row */}
         <View style={styles.cardHeaderRow}>
             <Text style={[styles.cardTitle, { color: theme.text }]}>Study History</Text>
             <View style={[styles.filterContainer, { backgroundColor: theme.background }]}>
@@ -199,8 +221,10 @@ export default function GrowthScreen() {
                 <FilterBtn type="1Y" label="1Y" />
             </View>
         </View>
+
+        {/* Chart */}
         <LineChart
-            data={chartData}
+            data={chartDataInfo.chart}
             width={screenWidth - 50}
             height={220}
             chartConfig={chartConfig}
@@ -208,9 +232,38 @@ export default function GrowthScreen() {
             style={{ borderRadius: 16, paddingRight: 40, marginTop: 10 }}
             fromZero={true}
         />
+
+        {/* --- NEW: AVERAGE & TROPHY SECTION --- */}
+        <View style={[styles.averageContainer, { borderTopColor: theme.border }]}>
+            <View style={{alignItems: 'flex-start'}}>
+                <Text style={{color: theme.textLight, fontSize: 12, fontWeight: 'bold'}}>
+                    {filter === '1W' ? 'WEEKLY' : filter === '1M' ? 'MONTHLY' : 'YEARLY'} AVERAGE
+                </Text>
+                <Text style={{color: theme.primary, fontSize: 22, fontWeight: 'bold'}}>
+                    {chartDataInfo.average.toFixed(1)} <Text style={{fontSize: 14}}>hrs/day</Text>
+                </Text>
+            </View>
+
+            <View style={{alignItems: 'flex-end'}}>
+                <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 4}}>
+                    <Ionicons name="trophy" size={16} color="#FFD700" />
+                    <Text style={{color: theme.text, fontWeight: 'bold', marginLeft: 4}}>Top Highs</Text>
+                </View>
+                <View style={{flexDirection: 'row'}}>
+                    {chartDataInfo.top3.map((val, idx) => (
+                        val > 0 && (
+                            <View key={idx} style={[styles.miniBadge, { backgroundColor: idx === 0 ? '#FFF9C4' : theme.background }]}>
+                                <Text style={{fontSize: 10, color: theme.text, fontWeight: 'bold'}}>{val.toFixed(0)}h</Text>
+                            </View>
+                        )
+                    ))}
+                </View>
+            </View>
+        </View>
+
       </View>
 
-      {/* PROGRESS RING - USES HOME SCREEN FILTER */}
+      {/* PROGRESS RING */}
       <View style={[styles.card, { backgroundColor: theme.card }]}>
         <Text style={[styles.cardTitle, { color: theme.text }]}>Goal Completion</Text>
         <View style={{ alignItems: 'center' }}>
@@ -230,22 +283,15 @@ export default function GrowthScreen() {
         </View>
       </View>
 
-      {/* CHAPTER RANKINGS - USES LOCAL INDEPENDENT FILTER */}
+      {/* CHAPTER RANKINGS */}
       <View style={[styles.card, { backgroundColor: theme.card }]}>
-        
         <View style={{flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 15, zIndex: 10}}>
             <View style={{flexDirection: 'row', alignItems: 'center'}}>
                 <Text style={{fontSize: 20, marginRight: 5}}>🏆</Text>
                 <Text style={[styles.cardTitle, { color: theme.text, fontSize: 16 }]}>Chapter Rankings</Text>
             </View>
-
-            <TouchableOpacity 
-                style={styles.filterToggleButton} 
-                onPress={() => setLeaderboardFilterVisible(!leaderboardFilterVisible)}
-            >
-                <Text style={{fontSize: 10, color: theme.textLight, marginRight: 4}}>
-                    {leaderboardFilterVisible ? "Hide Filters" : "Filter Subjects"}
-                </Text>
+            <TouchableOpacity style={styles.filterToggleButton} onPress={() => setLeaderboardFilterVisible(!leaderboardFilterVisible)}>
+                <Text style={{fontSize: 10, color: theme.textLight, marginRight: 4}}>{leaderboardFilterVisible ? "Hide Filters" : "Filter Subjects"}</Text>
                 <Ionicons name={leaderboardFilterVisible ? "chevron-up" : "chevron-down"} size={16} color={theme.textLight} />
             </TouchableOpacity>
         </View>
@@ -259,11 +305,7 @@ export default function GrowthScreen() {
                     {subjects.map(sub => {
                         const isSelected = selectedLeaderboardIds.includes(sub.id); 
                         return (
-                            <TouchableOpacity 
-                                key={sub.id} 
-                                style={[styles.filterRow, { backgroundColor: isSelected ? theme.secondary : theme.background }]}
-                                onPress={() => toggleLeaderboardSubject(sub.id)}
-                            >
+                            <TouchableOpacity key={sub.id} style={[styles.filterRow, { backgroundColor: isSelected ? theme.secondary : theme.background }]} onPress={() => toggleLeaderboardSubject(sub.id)}>
                                 <Ionicons name={isSelected ? "checkbox" : "square-outline"} size={20} color={isSelected ? theme.primary : theme.textLight} />
                                 <Text style={[styles.filterText, { color: isSelected ? theme.primary : theme.textLight }]}>{sub.name}</Text>
                             </TouchableOpacity>
@@ -290,12 +332,11 @@ export default function GrowthScreen() {
                         <Text style={{color: index === 0 ? theme.primary : theme.textLight, fontWeight: 'bold'}}>{(chap.timeSpent / 3600000).toFixed(1)}h</Text>
                     </View>
                 ))
-            ) : (
-                <Text style={{color: theme.textLight, fontStyle: 'italic', textAlign: 'center', padding: 20}}>No chapters selected.</Text>
-            )}
+            ) : (<Text style={{color: theme.textLight, fontStyle: 'italic', textAlign: 'center', padding: 20}}>No chapters selected.</Text>)}
         </View>
       </View>
 
+      {/* CALENDAR MODAL */}
       <Modal animationType="slide" transparent={true} visible={calendarVisible} onRequestClose={() => setCalendarVisible(false)}>
         <View style={styles.modalOverlay}>
             <View style={[styles.modalContent, { backgroundColor: theme.card, height: '70%' }]}>
@@ -340,6 +381,11 @@ const styles = StyleSheet.create({
   filterContainer: { flexDirection: 'row', borderRadius: 8, padding: 2 },
   filterBtn: { paddingVertical: 4, paddingHorizontal: 12, borderRadius: 6 },
   filterText: { fontSize: 12, fontWeight: '600' },
+  
+  // NEW: AVERAGE STYLES
+  averageContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20, paddingTop: 15, borderTopWidth: 1 },
+  miniBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, borderWidth: 1, borderColor: '#DDD', marginRight: 4 },
+
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
   modalContent: { width: '95%', borderRadius: 20, padding: 15, elevation: 5 },
   modalTitle: { fontSize: 20, fontWeight: 'bold' },
