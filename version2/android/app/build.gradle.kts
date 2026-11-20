@@ -30,9 +30,17 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         multiDexEnabled = true
+        manifestPlaceholders["appLabel"] = "STP v2"
     }
 
     buildTypes {
+        // Debug builds install as a separate app ("STP v2 (debug)"), so
+        // `flutter run` can never replace or wipe the real app and its data.
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            manifestPlaceholders["appLabel"] = "STP v2 (debug)"
+        }
         release {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.

@@ -100,3 +100,5 @@ flutter test            # 60 tests: day split, streaks, medals, v1 import, To-Do
 flutter run             # on a device / emulator
 flutter build apk --release
 ```
+
+`flutter run` installs a **separate debug app**, "STP v2 (debug)" (`com.mayank.stp_v2.debug`), next to the real "STP v2" (`com.mayank.stp_v2`). Debug runs never replace or wipe the real app's data. Release builds keep the normal package id, so they still update an existing install with its data intact.
