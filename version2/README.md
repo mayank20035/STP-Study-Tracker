@@ -35,9 +35,14 @@ Details and the edge-case rules are in [TODO_BOOK_PLAN.md](TODO_BOOK_PLAN.md).
 *The icon: a stopwatch whose ring fills from white to gold as you study, wrapped around an open book with a golden "aha" spark.*
 The original React Native app (v1) lives in the repository root on the `main` branch and is untouched.
 
-📥 **Download the APK:** see the [latest release (v2.1.0)](https://github.com/mayank20035/STP-Study-Tracker/releases/tag/v2.1.0).
-- `STP-v2.1.0-arm64.apk` (~20 MB) works on almost every modern Android phone.
-- `STP-v2.1.0-universal.apk` (~55 MB) works on any device.
+## 📥 Download the APK (v2.1.0)
+
+| APK | Size | For |
+|---|---|---|
+| [**STP-v2.1.0-arm64.apk**](https://github.com/mayank20035/STP-Study-Tracker/releases/download/v2.1.0/STP-v2.1.0-arm64.apk) | 20.7 MB | Almost every modern Android phone (recommended) |
+| [**STP-v2.1.0-universal.apk**](https://github.com/mayank20035/STP-Study-Tracker/releases/download/v2.1.0/STP-v2.1.0-universal.apk) | 57.3 MB | Any Android device |
+
+Release notes: [v2.1.0 release page](https://github.com/mayank20035/STP-Study-Tracker/releases/tag/v2.1.0).
 
 The first time you start a timer, allow notifications so the target alarm can ring.
 
