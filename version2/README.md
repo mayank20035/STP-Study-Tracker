@@ -6,25 +6,23 @@ Version 2 of **STP**, rebuilt from scratch in **Flutter / Material 3**.
 
 ## 📖 New in v2.1 — the To-Do Book
 
-| Today's page | A finished day | Target reached | Task done |
-|:---:|:---:|:---:|:---:|
-| <img src="screenshots/book_today.jpg" width="180"> | <img src="screenshots/book_yesterday.jpg" width="180"> | <img src="screenshots/alarm.jpg" width="180"> | <img src="screenshots/book_done.jpg" width="180"> |
+| Today's page | A past day | Target reached |
+|:---:|:---:|:---:|
+| <img src="screenshots/book_today.jpg" width="200"> | <img src="screenshots/book_yesterday.jpg" width="200"> | <img src="screenshots/alarm.jpg" width="200"> |
 
-The app now opens on a **diary**. Every page is one day, and today's page opens first.
+The app now opens on a simple **To-Do Book**. Every page is one day, and today's page opens first.
 
-1. **Plan:** on a page, tap *Add subject…*, choose one of your subjects and set how long to study it (e.g. Physics 2h, Maths 1h 30m).
-2. **Pick:** tap a subject on today's page. Only then does its timer unlock, on the book page itself, on **Today** and on **Focus**. Every other subject shows a 🔒.
-3. **Study:** start the stopwatch or a Pomodoro. The book shows a live "time left" countdown with a highlighter-style progress bar.
+1. **Plan:** tap *Add subject*, choose one of your subjects and set how long to study it (e.g. Physics 2h, Maths 1h 30m).
+2. **Pick:** tap a subject on today's page. Only then does its timer unlock, on the page itself, on **Today** and on **Focus**. Every other subject shows a 🔒.
+3. **Study:** start the stopwatch or a Pomodoro. The page shows the time left and a progress bar.
 4. **Alarm:** when the target is reached, the timer **stops by itself** at the exact second and an **alarm rings until you press STOP**. This also works when the app is closed or the phone is locked, because the alarm is scheduled as a notification with a custom chime, vibration and a lock-screen alert. There's also *Stop & keep going +15 min*.
 
-Book touches:
-- a leather cover that swings open when you start the app
-- 3D page-turn swipes
-- ruled paper, a spiral binding and a red bookmark ribbon on today's page
-- **DAY CONQUERED / PARTLY DONE / MISSED** rubber stamps and a ⭐ on finished days
-- a sticky note with a mood picker
+The page:
+- clean pages that turn with a 3D page-flip swipe (or the arrows / date picker)
+- a small Done / Partial / Missed label on past days; past pages are read-only
+- a note and mood for each day
 - plan future days ahead, and carry over yesterday's unfinished tasks with their remaining time
-- past pages are read-only history
+- the daily quote sits at the very bottom of the page
 
 Details and the edge-case rules are in [TODO_BOOK_PLAN.md](TODO_BOOK_PLAN.md).
 

@@ -43,9 +43,10 @@ void main() {
     await tester.pumpWidget(_wrap(store, const BookScreen()));
     await tester.pump(const Duration(seconds: 2)); // cover opens
     await tester.pump(const Duration(seconds: 2));
-    expect(find.text('TODAY'), findsOneWidget);
+    expect(find.text('Today'), findsOneWidget);
     expect(find.text(DateFormat('EEEE').format(now)), findsOneWidget);
-    expect(find.text('Add subject…'), findsOneWidget);
+    expect(find.text('Add subject'), findsOneWidget);
+    expect(find.text('No tasks'), findsOneWidget);
   });
 
   testWidgets('adding a subject from the sheet writes it on the page', (tester) async {
@@ -58,13 +59,13 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
     await tester.pump(const Duration(seconds: 2));
 
-    await tester.tap(find.text('Add subject…'));
+    await tester.tap(find.text('Add subject'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(ChoiceChip, 'Physics'));
     await tester.pump();
     await tester.tap(find.widgetWithText(ChoiceChip, '2h'));
     await tester.pump();
-    await tester.tap(find.text('Write it in the book'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Add'));
     await tester.pumpAndSettle();
 
     final tasks = store.planFor(store.todayKey).tasks;
