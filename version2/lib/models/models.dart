@@ -374,6 +374,88 @@ const avatarOptions = <String>[
   '🧑‍🎓', '👩‍💻', '👨‍🔬', '🧙', '🥷', '🤖', '👽', '🐉',
 ];
 
+/// One line in the To-Do book: study [subjectId] for [targetMs] that day.
+class PlanTask {
+  final String id;
+  final String subjectId;
+  int targetMs;
+
+  PlanTask({required this.id, required this.subjectId, required this.targetMs});
+
+  Map<String, dynamic> toJson() => {'id': id, 's': subjectId, 't': targetMs};
+  factory PlanTask.fromJson(Map<String, dynamic> j) => PlanTask(
+        id: j['id'] as String,
+        subjectId: j['s'] as String,
+        targetMs: (j['t'] as num).toInt(),
+      );
+}
+
+/// A single page of the To-Do book.
+class DayPlan {
+  final String dayKey;
+  List<PlanTask> tasks;
+  String note;
+  int? mood;
+
+  DayPlan({required this.dayKey, List<PlanTask>? tasks, this.note = '', this.mood})
+      : tasks = tasks ?? [];
+
+  bool get isEmpty => tasks.isEmpty && note.isEmpty && mood == null;
+
+  PlanTask? taskById(String? id) {
+    if (id == null) return null;
+    for (final t in tasks) {
+      if (t.id == id) return t;
+    }
+    return null;
+  }
+
+  PlanTask? taskForSubject(String subjectId) {
+    for (final t in tasks) {
+      if (t.subjectId == subjectId) return t;
+    }
+    return null;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'd': dayKey,
+        'tasks': tasks.map((t) => t.toJson()).toList(),
+        if (note.isNotEmpty) 'note': note,
+        if (mood != null) 'mood': mood,
+      };
+
+  factory DayPlan.fromJson(Map<String, dynamic> j) => DayPlan(
+        dayKey: j['d'] as String,
+        tasks: ((j['tasks'] as List?) ?? [])
+            .map((e) => PlanTask.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList(),
+        note: j['note'] as String? ?? '',
+        mood: (j['mood'] as num?)?.toInt(),
+      );
+}
+
+/// A target alarm that is ringing (or rang while the app was closed).
+class AlarmState {
+  final String taskId;
+  final String dayKey;
+  final String subjectId;
+  final int reachedAtMs;
+  const AlarmState({
+    required this.taskId,
+    required this.dayKey,
+    required this.subjectId,
+    required this.reachedAtMs,
+  });
+
+  Map<String, dynamic> toJson() => {'t': taskId, 'd': dayKey, 's': subjectId, 'a': reachedAtMs};
+  factory AlarmState.fromJson(Map<String, dynamic> j) => AlarmState(
+        taskId: j['t'] as String,
+        dayKey: j['d'] as String,
+        subjectId: j['s'] as String,
+        reachedAtMs: (j['a'] as num).toInt(),
+      );
+}
+
 /// Everything that is persisted.
 class AppData {
   List<Subject> subjects;
@@ -386,6 +468,10 @@ class AppData {
   PomodoroState? pomodoro;
   int pomodorosCompleted;
   List<String> seenAchievements;
+  Map<String, DayPlan> plans;
+  String? selectedTaskId;
+  String? selectedTaskDay;
+  AlarmState? alarm;
 
   AppData({
     List<Subject>? subjects,
@@ -398,7 +484,12 @@ class AppData {
     this.pomodoro,
     this.pomodorosCompleted = 0,
     List<String>? seenAchievements,
-  })  : subjects = subjects ?? [],
+    Map<String, DayPlan>? plans,
+    this.selectedTaskId,
+    this.selectedTaskDay,
+    this.alarm,
+  })  : plans = plans ?? {},
+        subjects = subjects ?? [],
         sessions = sessions ?? [],
         goals = goals ??
             [
@@ -427,6 +518,10 @@ class AppData {
         'pomodoro': pomodoro?.toJson(),
         'pomodorosCompleted': pomodorosCompleted,
         'seenAchievements': seenAchievements,
+        'plans': plans.values.where((p) => !p.isEmpty).map((p) => p.toJson()).toList(),
+        'selectedTaskId': selectedTaskId,
+        'selectedTaskDay': selectedTaskDay,
+        'alarm': alarm?.toJson(),
       };
 
   factory AppData.fromJson(Map<String, dynamic> j) {
@@ -442,6 +537,12 @@ class AppData {
       pomodoro: j['pomodoro'] == null ? null : PomodoroState.fromJson(m(j['pomodoro'])!),
       pomodorosCompleted: (j['pomodorosCompleted'] as num?)?.toInt() ?? 0,
       seenAchievements: (j['seenAchievements'] as List?)?.map((e) => e.toString()).toList(),
+      plans: {
+        for (final p in ((j['plans'] as List?) ?? []).map((e) => DayPlan.fromJson(m(e)!))) p.dayKey: p,
+      },
+      selectedTaskId: j['selectedTaskId'] as String?,
+      selectedTaskDay: j['selectedTaskDay'] as String?,
+      alarm: j['alarm'] == null ? null : AlarmState.fromJson(m(j['alarm'])!),
     );
   }
 }

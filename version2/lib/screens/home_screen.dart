@@ -6,6 +6,7 @@ import '../logic/day_utils.dart';
 import '../models/models.dart';
 import '../state/study_store.dart';
 import '../widgets/common.dart';
+import '../widgets/gate.dart';
 import '../widgets/subject_form.dart';
 import 'session_log_screen.dart';
 import 'subject_detail_screen.dart';
@@ -57,6 +58,10 @@ class HomeScreen extends StatelessWidget {
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               sliver: SliverToBoxAdapter(child: _HeroCard()),
+            ),
+            const SliverPadding(
+              padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
+              sliver: SliverToBoxAdapter(child: _TaskStrip()),
             ),
             // Always present so the slivers below keep their state.
             SliverPadding(
@@ -290,7 +295,8 @@ class _ActiveTimerBanner extends StatelessWidget {
       label = p.isBreak ? '☕ Break' : (p.isPaused ? '⏸ Paused' : '🍅 Pomodoro');
       clock = formatShortClock(store.pomodoroRemainingMs);
     } else {
-      label = 'Studying';
+      final left = store.timerRemainingMs;
+      label = left == null ? 'Studying' : 'Studying · ${formatDuration(left)} to target';
       clock = formatClock(store.liveMs);
     }
     return Card(
@@ -359,9 +365,16 @@ class _SubjectCardState extends State<SubjectCard> {
     final today = store.subjectTodayMs(s.id);
     final progress = s.targetHours <= 0 ? 0.0 : total / 3600000 / s.targetHours;
     final subjectRunning = store.isRunning(s.id) && store.activeTimer!.chapterId == null;
+    final picked = store.selectedTask?.subjectId == s.id;
 
     return Card(
       clipBehavior: Clip.antiAlias,
+      shape: picked
+          ? RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+              side: BorderSide(color: s.colorValue, width: 2),
+            )
+          : null,
       child: Column(children: [
         InkWell(
           onTap: () => setState(() => _expanded = !_expanded),
@@ -437,8 +450,9 @@ class _SubjectCardState extends State<SubjectCard> {
                       title: const Text('General study (no chapter)'),
                       trailing: _PlayButton(
                         running: subjectRunning,
+                        locked: !subjectRunning && store.canStart(s.id) != StartGate.ok,
                         color: s.colorValue,
-                        onTap: () => store.toggleTimer(s.id),
+                        onTap: () => showGateSnack(context, store, store.toggleTimer(s.id)),
                       ),
                     ),
                     for (var i = 0; i < s.chapters.length; i++)
@@ -468,7 +482,8 @@ class _PlayButton extends StatelessWidget {
   final bool running;
   final Color color;
   final VoidCallback onTap;
-  const _PlayButton({required this.running, required this.color, required this.onTap});
+  final bool locked;
+  const _PlayButton({required this.running, required this.color, required this.onTap, this.locked = false});
 
   @override
   Widget build(BuildContext context) {
@@ -478,14 +493,26 @@ class _PlayButton extends StatelessWidget {
       height: 38,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: running ? Theme.of(context).colorScheme.error : color,
+        color: running
+            ? Theme.of(context).colorScheme.error
+            : locked
+                ? Theme.of(context).colorScheme.outlineVariant
+                : color,
         boxShadow: running
             ? [BoxShadow(color: Theme.of(context).colorScheme.error.withValues(alpha: 0.4), blurRadius: 10)]
             : null,
       ),
       child: IconButton(
         padding: EdgeInsets.zero,
-        icon: Icon(running ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.white),
+        tooltip: locked ? 'Locked — pick this subject in your To-Do book' : null,
+        icon: Icon(
+            running
+                ? Icons.pause_rounded
+                : locked
+                    ? Icons.lock_rounded
+                    : Icons.play_arrow_rounded,
+            color: Colors.white,
+            size: locked ? 18 : 24),
         onPressed: onTap,
       ),
     );
@@ -581,8 +608,9 @@ class _ChapterRow extends StatelessWidget {
           ),
           _PlayButton(
             running: running,
+            locked: !running && store.canStart(subject.id) != StartGate.ok,
             color: subject.colorValue,
-            onTap: () => store.toggleTimer(subject.id, chapter.id),
+            onTap: () => showGateSnack(context, store, store.toggleTimer(subject.id, chapter.id)),
           ),
         ]),
       ),
@@ -704,4 +732,70 @@ void showReorderSheet(BuildContext context) {
       ),
     ),
   );
+}
+
+/// Shows the task picked in the To-Do book (or asks to pick one).
+class _TaskStrip extends StatelessWidget {
+  const _TaskStrip();
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<StudyStore>();
+    final scheme = Theme.of(context).colorScheme;
+    final nav = BookNavigator.of(context);
+    final task = store.selectedTask;
+    final sub = store.subjectById(task?.subjectId);
+    if (task == null || sub == null) {
+      final planned = store.planFor(store.todayKey).tasks.length;
+      return Card(
+        color: scheme.tertiaryContainer,
+        child: ListTile(
+          leading: const Text('📖', style: TextStyle(fontSize: 28)),
+          title: Text(planned == 0 ? 'Plan today in your To-Do book' : 'Pick a task in your To-Do book',
+              style: const TextStyle(fontWeight: FontWeight.w800)),
+          subtitle: Text(planned == 0
+              ? "Timers unlock once you add a subject to today's page and pick it."
+              : '$planned planned today — pick one to unlock its timer.'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: nav?.openBook,
+        ),
+      );
+    }
+    final today = store.todayKey;
+    final progress = store.taskProgressMs(today, task);
+    final done = store.isTaskDone(today, task);
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: nav?.openBook,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const Text('📌', style: TextStyle(fontSize: 16)),
+              const SizedBox(width: 6),
+              Text("TODAY'S PICK",
+                  style: TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.4, color: scheme.onSurfaceVariant)),
+              const Spacer(),
+              Text(done ? '✔ Done' : '${formatDuration(store.taskRemainingMs(today, task))} left',
+                  style: TextStyle(fontWeight: FontWeight.w800, color: done ? Colors.green : sub.colorValue)),
+            ]),
+            const SizedBox(height: 8),
+            Row(children: [
+              SubjectAvatar(sub, size: 36),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(sub.name, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+              ),
+              Text('${formatDuration(progress)} / ${formatDuration(task.targetMs)}',
+                  style: TextStyle(color: scheme.onSurfaceVariant, fontWeight: FontWeight.w600)),
+            ]),
+            const SizedBox(height: 8),
+            LinearBar(value: progress / task.targetMs, color: sub.colorValue, height: 6),
+          ]),
+        ),
+      ),
+    );
+  }
 }

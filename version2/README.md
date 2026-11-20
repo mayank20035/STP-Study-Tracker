@@ -4,6 +4,30 @@
 
 Version 2 of **STP**, rebuilt from scratch in **Flutter / Material 3**.
 
+## 📖 New in v2.1 — the To-Do Book
+
+| Today's page | A finished day | Target reached | Task done |
+|:---:|:---:|:---:|:---:|
+| <img src="screenshots/book_today.jpg" width="180"> | <img src="screenshots/book_yesterday.jpg" width="180"> | <img src="screenshots/alarm.jpg" width="180"> | <img src="screenshots/book_done.jpg" width="180"> |
+
+The app now opens on a **diary**. Every page is one day, and today's page opens first.
+
+1. **Plan:** on a page, tap *Add subject…*, choose one of your subjects and set how long to study it (e.g. Physics 2h, Maths 1h 30m).
+2. **Pick:** tap a subject on today's page. Only then does its timer unlock, on the book page itself, on **Today** and on **Focus**. Every other subject shows a 🔒.
+3. **Study:** start the stopwatch or a Pomodoro. The book shows a live "time left" countdown with a highlighter-style progress bar.
+4. **Alarm:** when the target is reached, the timer **stops by itself** at the exact second and an **alarm rings until you press STOP**. This also works when the app is closed or the phone is locked, because the alarm is scheduled as a notification with a custom chime, vibration and a lock-screen alert. There's also *Stop & keep going +15 min*.
+
+Book touches:
+- a leather cover that swings open when you start the app
+- 3D page-turn swipes
+- ruled paper, a spiral binding and a red bookmark ribbon on today's page
+- **DAY CONQUERED / PARTLY DONE / MISSED** rubber stamps and a ⭐ on finished days
+- a sticky note with a mood picker
+- plan future days ahead, and carry over yesterday's unfinished tasks with their remaining time
+- past pages are read-only history
+
+Details and the edge-case rules are in [TODO_BOOK_PLAN.md](TODO_BOOK_PLAN.md).
+
 | Today | Focus | Insights | Ranks | Profile |
 |:---:|:---:|:---:|:---:|:---:|
 | <img src="screenshots/today.jpg" width="160"> | <img src="screenshots/focus.jpg" width="160"> | <img src="screenshots/insights.jpg" width="160"> | <img src="screenshots/ranks.jpg" width="160"> | <img src="screenshots/profile.jpg" width="160"> |
@@ -11,13 +35,15 @@ Version 2 of **STP**, rebuilt from scratch in **Flutter / Material 3**.
 *The icon: a stopwatch whose ring fills from white to gold as you study, wrapped around an open book with a golden "aha" spark.*
 The original React Native app (v1) lives in the repository root on the `main` branch and is untouched.
 
-📥 **Download the APK:** see the [v2.0.0 release](https://github.com/mayank20035/STP-Study-Tracker/releases/tag/v2.0.0).
-- `STP-v2.0.0-arm64.apk` (~20 MB) — for almost every modern Android phone
-- `STP-v2.0.0-universal.apk` (~55 MB) — works on any device
+📥 **Download the APK:** see the [latest release (v2.1.0)](https://github.com/mayank20035/STP-Study-Tracker/releases/tag/v2.1.0).
+- `STP-v2.1.0-arm64.apk` (~20 MB) works on almost every modern Android phone.
+- `STP-v2.1.0-universal.apk` (~55 MB) works on any device.
+
+The first time you start a timer, allow notifications so the target alarm can ring.
 
 It installs **alongside** v1 (different package id: `com.mayank.stp_v2`). Android will ask you to allow installing from unknown sources.
 
-## ✨ What's new in v2
+## ✨ Everything else in v2
 
 | | Feature |
 |---|---|
@@ -46,15 +72,15 @@ It installs **alongside** v1 (different package id: `com.mayank.stp_v2`). Androi
 
 ## 🛠️ Tech
 
-Flutter 3.41 · Dart 3 · `provider` · `shared_preferences` · `fl_chart` · `share_plus` · `file_picker`
+Flutter 3.41 · Dart 3 · `provider` · `shared_preferences` · `fl_chart` · `share_plus` · `file_picker` · `flutter_local_notifications`
 
 ```
 lib/
   models/      data classes (Subject, Chapter, StudySession, settings…)
   logic/       day boundaries, stats, streaks, insights, achievements
-  services/    storage + backup (v2 & v1 formats)
-  state/       StudyStore (ChangeNotifier) – timers, pomodoro, CRUD
-  screens/     Today, Focus, Insights, Ranks, Profile, Subject detail, Session log
+  services/    storage, backup (v2 & v1 formats), alarm notifications
+  state/       StudyStore (ChangeNotifier) – book, timer gate, auto-stop, pomodoro, CRUD
+  screens/     Book, Today, Focus, Insights, Ranks, Profile, Alarm, Subject detail, Session log
   widgets/     rings, heatmap, calendar, forms
 ```
 
@@ -65,7 +91,7 @@ See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full analysis of v1
 ```bash
 cd version2
 flutter pub get
-flutter test            # unit tests (day split, streaks, medals, v1 import)
+flutter test            # 60 tests: day split, streaks, medals, v1 import, To-Do book & alarm edge cases
 flutter run             # on a device / emulator
 flutter build apk --release
 ```

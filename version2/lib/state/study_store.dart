@@ -8,6 +8,7 @@ import '../logic/achievements.dart';
 import '../logic/day_utils.dart';
 import '../logic/stats.dart';
 import '../models/models.dart';
+import '../services/alarm_service.dart';
 import '../services/storage_service.dart';
 
 class PomodoroEvent {
@@ -23,10 +24,34 @@ class AchievementProgress {
   bool get unlocked => progress >= 1;
 }
 
+/// Result of trying to start a timer (the To-Do book gate).
+enum StartGate { ok, noTaskSelected, wrongSubject, targetReached }
+
+/// Result of editing the To-Do book.
+enum PlanResult { ok, unknownSubject, invalidTarget, duplicateSubject, pastDay, notFound }
+
+enum TaskStatus { pending, inProgress, done }
+
+enum PageStatus { empty, conquered, partial, missed, upcoming, today }
+
 class StudyStore extends ChangeNotifier {
-  StudyStore({StorageService? storage}) : _storage = storage ?? StorageService();
+  StudyStore({
+    StorageService? storage,
+    AlarmScheduler? alarms,
+    int Function()? clock,
+    this.enableTicker = true,
+  })  : _storage = storage ?? StorageService(),
+        alarms = alarms ?? NoopAlarmScheduler(),
+        _clock = clock ?? (() => DateTime.now().millisecondsSinceEpoch);
 
   final StorageService _storage;
+  final AlarmScheduler alarms;
+  final int Function() _clock;
+  final bool enableTicker;
+
+  /// Longest target allowed for one task.
+  static const int maxTargetMs = 24 * 3600000;
+  static const int minTargetMs = 60000;
   AppData _data = AppData();
   bool _loaded = false;
   Timer? _ticker;
@@ -52,8 +77,8 @@ class StudyStore extends ChangeNotifier {
   PomodoroState? get pomodoro => _data.pomodoro;
   int get pomodorosCompleted => _data.pomodorosCompleted;
 
-  int get nowMs => DateTime.now().millisecondsSinceEpoch;
-  String get todayKey => dayKeyFor(DateTime.now(), settings.dayStartHour);
+  int get nowMs => _clock();
+  String get todayKey => dayKeyForMs(nowMs, settings.dayStartHour);
 
   Subject? subjectById(String? id) {
     if (id == null) return null;
@@ -73,9 +98,22 @@ class StudyStore extends ChangeNotifier {
     _validateRunningState();
     _loaded = true;
     _syncAchievementsSilently();
+    _lastTickDay = todayKey;
     _advancePomodoro();
-    _startTicker();
+    _enforceLimits(fromResume: true);
+    _clearStaleSelection();
+    _syncAlarmSchedule(force: true);
+    _verifyPersistedAlarm();
+    if (enableTicker) _startTicker();
     notifyListeners();
+  }
+
+  /// Re-checks timers when the app returns to the foreground.
+  void onResume() {
+    if (!_loaded) return;
+    _enforceLimits(fromResume: true);
+    _verifyPersistedAlarm();
+    tick();
   }
 
   void _validateRunningState() {
@@ -87,16 +125,24 @@ class StudyStore extends ChangeNotifier {
 
   void _startTicker() {
     _ticker?.cancel();
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _onTick());
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) => tick());
   }
 
   String? _lastTickDay;
-  void _onTick() {
+
+  /// Called every second (and directly by tests).
+  void tick() {
     final day = todayKey;
     final dayChanged = _lastTickDay != null && _lastTickDay != day;
     _lastTickDay = day;
-    if (dayChanged) _invalidate();
+    if (dayChanged) {
+      _invalidate();
+      _enforceLimits();
+      _clearStaleSelection();
+      _changed();
+    }
     if (_data.pomodoro != null) _advancePomodoro();
+    if (_data.activeTimer != null) _enforceLimits();
     if (_data.activeTimer != null || _data.pomodoro != null || dayChanged) {
       notifyListeners();
     }
@@ -104,6 +150,7 @@ class StudyStore extends ChangeNotifier {
 
   void _changed({bool sessionsChanged = false}) {
     if (sessionsChanged) _invalidate();
+    _syncAlarmSchedule();
     notifyListeners();
     _saveDebounce?.cancel();
     _saveDebounce = Timer(const Duration(milliseconds: 400), () => _storage.save(_data));
@@ -146,7 +193,7 @@ class StudyStore extends ChangeNotifier {
     return _snapshot!;
   }
 
-  int get liveMs => activeTimer == null ? 0 : math.max(0, nowMs - activeTimer!.startMs);
+  int get liveMs => activeTimer == null ? 0 : math.max<int>(0, nowMs - activeTimer!.startMs);
 
   Map<String, int> get _liveSplit => activeTimer == null
       ? const {}
@@ -294,8 +341,8 @@ class StudyStore extends ChangeNotifier {
 
   // ---------------------------------------------------------------- timer
   void _recordSession(String subjectId, String? chapterId, int start, int end,
-      {bool pomodoro = false}) {
-    if (end - start < minSessionMs) return;
+      {bool pomodoro = false, bool force = false}) {
+    if (end - start < (force ? 1 : minSessionMs)) return;
     if (subjectById(subjectId) == null) return;
     _data.sessions.add(StudySession(
       id: newId(),
@@ -305,30 +352,52 @@ class StudyStore extends ChangeNotifier {
       endMs: end,
       pomodoro: pomodoro,
     ));
+    _invalidate();
+  }
+
+  /// Whether a timer for [subjectId] may start right now. A timer can only
+  /// run for the task picked from today's page of the To-Do book.
+  StartGate canStart(String subjectId) {
+    final sel = selectedTask;
+    if (sel == null) return StartGate.noTaskSelected;
+    if (sel.subjectId != subjectId) return StartGate.wrongSubject;
+    if (isTaskDone(todayKey, sel)) return StartGate.targetReached;
+    return StartGate.ok;
   }
 
   /// Starts (or switches) the stopwatch. Only one timer runs at a time.
-  void startTimer(String subjectId, [String? chapterId]) {
+  StartGate startTimer(String subjectId, [String? chapterId]) {
+    final gate = canStart(subjectId);
+    if (gate != StartGate.ok) return gate;
     _stopEverything();
     _data.activeTimer = ActiveTimer(subjectId: subjectId, chapterId: chapterId, startMs: nowMs);
-    HapticFeedback.lightImpact();
+    _safeHaptic(HapticFeedback.lightImpact);
+    alarms.ensurePermissions();
     _changed(sessionsChanged: true);
+    return StartGate.ok;
   }
 
   void stopTimer() {
     _stopEverything();
-    HapticFeedback.lightImpact();
+    _safeHaptic(HapticFeedback.lightImpact);
     _changed(sessionsChanged: true);
     _checkNewAchievements();
   }
 
-  void toggleTimer(String subjectId, [String? chapterId]) {
+  /// Stopping is always allowed; starting goes through [canStart].
+  StartGate toggleTimer(String subjectId, [String? chapterId]) {
     final t = activeTimer;
     if (t != null && t.subjectId == subjectId && t.chapterId == chapterId && pomodoro == null) {
       stopTimer();
-    } else {
-      startTimer(subjectId, chapterId);
+      return StartGate.ok;
     }
+    return startTimer(subjectId, chapterId);
+  }
+
+  void _safeHaptic(Future<void> Function() f) {
+    try {
+      f().catchError((_) {});
+    } catch (_) {}
   }
 
   void _stopEverything() {
@@ -351,17 +420,21 @@ class StudyStore extends ChangeNotifier {
     final p = pomodoro;
     if (p == null) return 0;
     if (p.isPaused) return p.pausedRemainingMs!;
-    return math.max(0, p.phaseStartMs + phaseLengthMs(p.phase) - nowMs);
+    return math.max<int>(0, p.phaseStartMs + phaseLengthMs(p.phase) - nowMs);
   }
 
-  void startPomodoro(String subjectId, [String? chapterId]) {
+  StartGate startPomodoro(String subjectId, [String? chapterId]) {
+    final gate = canStart(subjectId);
+    if (gate != StartGate.ok) return gate;
     _stopEverything();
     final now = nowMs;
     _data.pomodoro = PomodoroState(
         subjectId: subjectId, chapterId: chapterId, phase: PomodoroPhase.work, phaseStartMs: now);
     _data.activeTimer = ActiveTimer(subjectId: subjectId, chapterId: chapterId, startMs: now);
-    HapticFeedback.mediumImpact();
+    _safeHaptic(HapticFeedback.mediumImpact);
+    alarms.ensurePermissions();
     _changed(sessionsChanged: true);
+    return StartGate.ok;
   }
 
   void pausePomodoro() {
@@ -378,6 +451,10 @@ class StudyStore extends ChangeNotifier {
   void resumePomodoro() {
     final p = pomodoro;
     if (p == null || !p.isPaused) return;
+    if (p.phase == PomodoroPhase.work && canStart(p.subjectId) != StartGate.ok) {
+      stopTimer();
+      return;
+    }
     final now = nowMs;
     final start = now - (phaseLengthMs(p.phase) - p.pausedRemainingMs!);
     _data.pomodoro = p.copyWith(phaseStartMs: start, clearPaused: true);
@@ -414,6 +491,14 @@ class StudyStore extends ChangeNotifier {
       guard++;
       changed = true;
       final phaseEnd = p.phaseStartMs + phaseLengthMs(p.phase);
+      if (p.phase == PomodoroPhase.work && _data.activeTimer != null) {
+        final lim = _limitFor(_data.activeTimer!);
+        if (lim.atMs <= phaseEnd) {
+          // The task target (or the day) ends inside this focus block.
+          _finishAt(lim);
+          return;
+        }
+      }
       if (p.phase == PomodoroPhase.work) {
         final t = _data.activeTimer;
         if (t != null) {
@@ -450,12 +535,345 @@ class StudyStore extends ChangeNotifier {
     }
     if (changed) {
       _data.pomodoro = p;
-      HapticFeedback.heavyImpact();
-      SystemSound.play(SystemSoundType.alert);
+      _safeHaptic(HapticFeedback.heavyImpact);
+      _safeHaptic(() => SystemSound.play(SystemSoundType.alert));
       if (message != null) pomodoroEvents.value = PomodoroEvent(++_eventSerial, message);
       _changed(sessionsChanged: true);
       _checkNewAchievements();
     }
+  }
+
+  // ---------------------------------------------------------------- to-do book
+  /// The page for [dayKey] (an empty, unsaved page if nothing is planned).
+  DayPlan planFor(String dayKey) => _data.plans[dayKey] ?? DayPlan(dayKey: dayKey);
+
+  DayPlan _ensurePlan(String dayKey) =>
+      _data.plans.putIfAbsent(dayKey, () => DayPlan(dayKey: dayKey));
+
+  bool isPastDay(String dayKey) => dayKey.compareTo(todayKey) < 0;
+
+  /// The task picked on today's page, if any.
+  PlanTask? get selectedTask {
+    if (_data.selectedTaskDay != todayKey) return null;
+    return _data.plans[todayKey]?.taskById(_data.selectedTaskId);
+  }
+
+  int taskProgressMs(String dayKey, PlanTask t) => subjectDayMs(t.subjectId, dayKey);
+
+  int taskRemainingMs(String dayKey, PlanTask t) =>
+      math.max<int>(0, t.targetMs - taskProgressMs(dayKey, t));
+
+  bool isTaskDone(String dayKey, PlanTask t) => taskProgressMs(dayKey, t) >= t.targetMs;
+
+  TaskStatus taskStatus(String dayKey, PlanTask t) {
+    if (isTaskDone(dayKey, t)) return TaskStatus.done;
+    return taskProgressMs(dayKey, t) > 0 ? TaskStatus.inProgress : TaskStatus.pending;
+  }
+
+  ({int done, int total, double percent}) pageScore(String dayKey) {
+    final tasks = planFor(dayKey).tasks;
+    if (tasks.isEmpty) return (done: 0, total: 0, percent: 0);
+    var done = 0;
+    var target = 0;
+    var progress = 0;
+    for (final t in tasks) {
+      if (isTaskDone(dayKey, t)) done++;
+      target += t.targetMs;
+      progress += math.min(t.targetMs, taskProgressMs(dayKey, t));
+    }
+    return (done: done, total: tasks.length, percent: target == 0 ? 0 : progress / target);
+  }
+
+  PageStatus pageStatus(String dayKey) {
+    final tasks = planFor(dayKey).tasks;
+    final cmp = dayKey.compareTo(todayKey);
+    if (cmp > 0) return PageStatus.upcoming;
+    if (tasks.isEmpty) return cmp == 0 ? PageStatus.today : PageStatus.empty;
+    final score = pageScore(dayKey);
+    if (score.done == score.total) return PageStatus.conquered;
+    if (cmp == 0) return PageStatus.today;
+    return score.percent > 0 ? PageStatus.partial : PageStatus.missed;
+  }
+
+  PlanResult _validateTarget(int targetMs) =>
+      targetMs < minTargetMs || targetMs > maxTargetMs ? PlanResult.invalidTarget : PlanResult.ok;
+
+  /// Adds a subject to a page of the book. Only existing subjects, one line
+  /// per subject, and never on a page in the past.
+  PlanResult addPlanTask(String dayKey, String subjectId, int targetMs) {
+    if (isPastDay(dayKey)) return PlanResult.pastDay;
+    if (subjectById(subjectId) == null) return PlanResult.unknownSubject;
+    final v = _validateTarget(targetMs);
+    if (v != PlanResult.ok) return v;
+    final plan = _ensurePlan(dayKey);
+    if (plan.taskForSubject(subjectId) != null) return PlanResult.duplicateSubject;
+    plan.tasks.add(PlanTask(id: newId(), subjectId: subjectId, targetMs: targetMs));
+    _changed();
+    return PlanResult.ok;
+  }
+
+  PlanResult updatePlanTaskTarget(String dayKey, String taskId, int targetMs) {
+    if (isPastDay(dayKey)) return PlanResult.pastDay;
+    final task = _data.plans[dayKey]?.taskById(taskId);
+    if (task == null) return PlanResult.notFound;
+    final v = _validateTarget(targetMs);
+    if (v != PlanResult.ok) return v;
+    task.targetMs = targetMs;
+    // Lowering the target under what is already studied finishes the task now.
+    _enforceLimits(endAtNow: true);
+    _changed();
+    return PlanResult.ok;
+  }
+
+  PlanResult removePlanTask(String dayKey, String taskId) {
+    if (isPastDay(dayKey)) return PlanResult.pastDay;
+    final plan = _data.plans[dayKey];
+    final task = plan?.taskById(taskId);
+    if (plan == null || task == null) return PlanResult.notFound;
+    final wasSelected = _data.selectedTaskId == taskId && _data.selectedTaskDay == dayKey;
+    if (wasSelected) {
+      if (activeTimer?.subjectId == task.subjectId || pomodoro?.subjectId == task.subjectId) {
+        _stopEverything();
+      }
+      _data.selectedTaskId = null;
+      _data.selectedTaskDay = null;
+    }
+    plan.tasks.remove(task);
+    if (_data.alarm?.taskId == taskId) {
+      _data.alarm = null;
+      alarms.cancel();
+    }
+    _changed(sessionsChanged: true);
+    return PlanResult.ok;
+  }
+
+  void reorderPlanTasks(String dayKey, int oldIndex, int newIndex) {
+    final plan = _data.plans[dayKey];
+    if (plan == null || isPastDay(dayKey)) return;
+    if (newIndex > oldIndex) newIndex--;
+    plan.tasks.insert(newIndex, plan.tasks.removeAt(oldIndex));
+    _changed();
+  }
+
+  void setDayNote(String dayKey, String note) {
+    _ensurePlan(dayKey).note = note;
+    _changed();
+  }
+
+  void setDayMood(String dayKey, int? mood) {
+    _ensurePlan(dayKey).mood = mood;
+    _changed();
+  }
+
+  /// Unfinished tasks of [fromKey] that could be carried to [toKey].
+  List<PlanTask> carryOverCandidates(String fromKey, String toKey) {
+    final to = planFor(toKey);
+    return planFor(fromKey)
+        .tasks
+        .where((t) =>
+            subjectById(t.subjectId) != null &&
+            !isTaskDone(fromKey, t) &&
+            to.taskForSubject(t.subjectId) == null)
+        .toList();
+  }
+
+  /// Copies unfinished tasks with their remaining time. Returns how many.
+  int carryOverUnfinished(String fromKey, String toKey) {
+    if (isPastDay(toKey)) return 0;
+    var n = 0;
+    for (final t in carryOverCandidates(fromKey, toKey)) {
+      var remaining = taskRemainingMs(fromKey, t);
+      remaining = ((remaining + 59999) ~/ 60000) * 60000; // round up to a minute
+      if (addPlanTask(toKey, t.subjectId, remaining.clamp(minTargetMs, maxTargetMs)) == PlanResult.ok) n++;
+    }
+    return n;
+  }
+
+  /// Picks a task on today's page; from now on only its subject can be timed.
+  StartGate selectTask(String taskId) {
+    final task = _data.plans[todayKey]?.taskById(taskId);
+    if (task == null) return StartGate.noTaskSelected;
+    if (isTaskDone(todayKey, task)) return StartGate.targetReached;
+    final runningSubject = activeTimer?.subjectId ?? pomodoro?.subjectId;
+    if (runningSubject != null && runningSubject != task.subjectId) _stopEverything();
+    _data.selectedTaskId = task.id;
+    _data.selectedTaskDay = todayKey;
+    _safeHaptic(HapticFeedback.selectionClick);
+    _changed(sessionsChanged: true);
+    return StartGate.ok;
+  }
+
+  void clearSelection() {
+    final sel = selectedTask;
+    if (sel != null &&
+        (activeTimer?.subjectId == sel.subjectId || pomodoro?.subjectId == sel.subjectId)) {
+      _stopEverything();
+    }
+    _data.selectedTaskId = null;
+    _data.selectedTaskDay = null;
+    _changed(sessionsChanged: true);
+  }
+
+  void _clearStaleSelection() {
+    if (_data.selectedTaskDay != null && _data.selectedTaskDay != todayKey) {
+      _data.selectedTaskId = null;
+      _data.selectedTaskDay = null;
+    }
+  }
+
+  void _dropInvalidSelection() {
+    final day = _data.selectedTaskDay;
+    if (day != null && _data.plans[day]?.taskById(_data.selectedTaskId) == null) {
+      _data.selectedTaskId = null;
+      _data.selectedTaskDay = null;
+    }
+  }
+
+  // ---------------------------------------------------------------- limits & alarm
+  /// When the running timer must stop: the task target or the end of the
+  /// study day, whichever comes first.
+  ({int atMs, bool isTarget, PlanTask? task, String dayKey}) _limitFor(ActiveTimer t) {
+    final h = settings.dayStartHour;
+    final startDay = dayKeyForMs(t.startMs, h);
+    var at = dayStartMoment(addDays(startDay, 1), h).millisecondsSinceEpoch;
+    PlanTask? task;
+    if (_data.selectedTaskDay == startDay) {
+      final sel = _data.plans[startDay]?.taskById(_data.selectedTaskId);
+      if (sel != null && sel.subjectId == t.subjectId) {
+        final before = snapshot.subjectDaily[t.subjectId]?[startDay] ?? 0;
+        final int reach = t.startMs + math.max<int>(0, sel.targetMs - before);
+        if (reach <= at) {
+          at = reach;
+          task = sel;
+        }
+      }
+    }
+    return (atMs: at, isTarget: task != null, task: task, dayKey: startDay);
+  }
+
+  /// Time left before the running timer stops at its target (null = none).
+  int? get timerRemainingMs {
+    final t = activeTimer;
+    if (t == null) return null;
+    final lim = _limitFor(t);
+    return lim.isTarget ? math.max<int>(0, lim.atMs - nowMs) : null;
+  }
+
+  void _enforceLimits({bool fromResume = false, bool endAtNow = false}) {
+    final t = _data.activeTimer;
+    if (t == null) return;
+    final lim = _limitFor(t);
+    if (nowMs < lim.atMs) return;
+    _finishAt(lim, endAtNow: endAtNow);
+  }
+
+  void _finishAt(({int atMs, bool isTarget, PlanTask? task, String dayKey}) lim,
+      {bool endAtNow = false}) {
+    final t = _data.activeTimer;
+    if (t == null) return;
+    // End exactly when the target was reached, even if the app was closed;
+    // after an edit, the time actually studied until now is kept.
+    final end = endAtNow ? math.max(nowMs, t.startMs) : lim.atMs;
+    _recordSession(t.subjectId, t.chapterId, t.startMs, end,
+        pomodoro: _data.pomodoro != null, force: true);
+    _data.activeTimer = null;
+    _data.pomodoro = null;
+    final sub = subjectById(t.subjectId);
+    if (lim.isTarget) {
+      _data.alarm = AlarmState(
+        taskId: lim.task!.id,
+        dayKey: lim.dayKey,
+        subjectId: t.subjectId,
+        reachedAtMs: end,
+      );
+      if (nowMs - end < 15000) {
+        alarms.ringNow(title: _alarmTitle(sub), body: _alarmBody(lim.task!));
+      } else {
+        // It rang while the app was closed: keep the alarm only if the
+        // notification is still ringing.
+        _verifyPersistedAlarm();
+      }
+      pomodoroEvents.value =
+          PomodoroEvent(++_eventSerial, '🎯 Target reached for ${sub?.name ?? 'your task'}!');
+    } else {
+      _data.selectedTaskId = null;
+      _data.selectedTaskDay = null;
+      pomodoroEvents.value = PomodoroEvent(
+          ++_eventSerial, '📖 A new page has begun — pick today\'s task in your book.');
+    }
+    _safeHaptic(HapticFeedback.heavyImpact);
+    _changed(sessionsChanged: true);
+    _checkNewAchievements();
+  }
+
+  String _alarmTitle(Subject? s) => '🎯 Target reached: ${s?.emoji ?? ''} ${s?.name ?? 'Study'}';
+  String _alarmBody(PlanTask t) =>
+      'You finished ${formatDuration(t.targetMs)} today. Tap Stop to silence the alarm.';
+
+  int? _scheduledAt;
+
+  void _syncAlarmSchedule({bool force = false}) {
+    if (!_loaded && !force) return;
+    final t = _data.activeTimer;
+    int? want;
+    ({int atMs, bool isTarget, PlanTask? task, String dayKey})? lim;
+    if (t != null) {
+      lim = _limitFor(t);
+      if (lim.isTarget && lim.atMs > nowMs) want = lim.atMs;
+    }
+    if (!force && want == _scheduledAt) return;
+    _scheduledAt = want;
+    if (want == null) {
+      if (_data.alarm == null) alarms.cancel();
+    } else {
+      alarms.schedule(DateTime.fromMillisecondsSinceEpoch(want),
+          title: _alarmTitle(subjectById(t!.subjectId)), body: _alarmBody(lim!.task!));
+    }
+  }
+
+  void _verifyPersistedAlarm() {
+    final a = _data.alarm;
+    if (a == null) return;
+    alarms.isRinging().then((ringing) {
+      if (!ringing && _data.alarm == a && nowMs - a.reachedAtMs >= 15000) {
+        _data.alarm = null;
+        _changed();
+      }
+    });
+  }
+
+  AlarmState? get alarm => _data.alarm;
+
+  /// Silences the alarm (the "Stop" button).
+  void stopAlarm() {
+    if (_data.alarm == null) return;
+    _data.alarm = null;
+    _scheduledAt = null;
+    alarms.cancel();
+    _safeHaptic(HapticFeedback.mediumImpact);
+    _changed();
+  }
+
+  /// Stops the alarm and gives the task [minutes] more, keeping it selected.
+  StartGate extendAfterAlarm(int minutes) {
+    final a = _data.alarm;
+    stopAlarm();
+    if (a == null) return StartGate.noTaskSelected;
+    final task = _data.plans[a.dayKey]?.taskById(a.taskId);
+    if (task == null || a.dayKey != todayKey) return StartGate.noTaskSelected;
+    task.targetMs = math.min(maxTargetMs, task.targetMs + minutes * 60000);
+    _data.selectedTaskId = task.id;
+    _data.selectedTaskDay = todayKey;
+    _changed();
+    return StartGate.ok;
+  }
+
+  /// Adds [minutes] to a task's target (e.g. "+15 min" on a finished task).
+  PlanResult extendTask(String dayKey, String taskId, int minutes) {
+    final task = _data.plans[dayKey]?.taskById(taskId);
+    if (task == null) return PlanResult.notFound;
+    return updatePlanTaskTarget(
+        dayKey, taskId, math.min(maxTargetMs, task.targetMs + minutes * 60000));
   }
 
   // ---------------------------------------------------------------- subjects
@@ -496,6 +914,14 @@ class StudyStore extends ChangeNotifier {
     }
     _data.subjects.removeWhere((s) => s.id == id);
     _data.sessions.removeWhere((s) => s.subjectId == id);
+    for (final plan in _data.plans.values) {
+      plan.tasks.removeWhere((t) => t.subjectId == id);
+    }
+    if (_data.alarm?.subjectId == id) {
+      _data.alarm = null;
+      alarms.cancel();
+    }
+    _dropInvalidSelection();
     settings.homeFilterIds?.remove(id);
     _changed(sessionsChanged: true);
   }
@@ -653,6 +1079,10 @@ class StudyStore extends ChangeNotifier {
 
   void replaceAll(AppData data) {
     _data = data;
+    _data.alarm = null;
+    alarms.cancel();
+    _scheduledAt = null;
+    _dropInvalidSelection();
     if (_data.goals.isEmpty) _data.goals = AppData().goals;
     _validateRunningState();
     _invalidate();

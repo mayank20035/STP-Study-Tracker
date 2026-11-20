@@ -8,6 +8,7 @@ import '../logic/stats.dart';
 import '../models/models.dart';
 import '../state/study_store.dart';
 import '../widgets/common.dart';
+import '../widgets/gate.dart';
 
 /// Distraction-free focus timer: stopwatch or Pomodoro.
 class FocusScreen extends StatefulWidget {
@@ -30,8 +31,12 @@ class _FocusScreenState extends State<FocusScreen> {
     final p = store.pomodoro;
     final t = store.activeTimer;
     final runningSubject = store.subjectById(p?.subjectId ?? t?.subjectId);
-    final Subject? sub = runningSubject ?? store.subjectById(_subjectId) ??
-        (store.subjects.isEmpty ? null : store.subjects.first);
+    final picked = store.subjectById(store.selectedTask?.subjectId);
+    final Subject? sub = runningSubject ?? picked;
+    if (_subjectId != picked?.id) {
+      _subjectId = picked?.id;
+      _chapterId = null;
+    }
     final color = sub?.colorValue ?? scheme.primary;
 
     return Scaffold(
@@ -45,18 +50,23 @@ class _FocusScreenState extends State<FocusScreen> {
           ),
         ),
         child: SafeArea(
-          child: store.subjects.isEmpty
-              ? const Center(
+          child: sub == null
+              ? Center(
                   child: EmptyState(
-                    emoji: '🎯',
-                    title: 'Nothing to focus on yet',
-                    body: 'Add a subject on the Today tab, then come back here to start a focus session.',
+                    emoji: '📖',
+                    title: 'Pick a task first',
+                    body: "Focus sessions unlock for the subject you pick on today's page of your To-Do book.",
+                    action: FilledButton.icon(
+                      onPressed: BookNavigator.of(context)?.openBook,
+                      icon: const Icon(Icons.menu_book),
+                      label: const Text('Open my To-Do book'),
+                    ),
                   ),
                 )
               : runningSubject != null
                   ? _RunningView(subject: runningSubject, color: color)
                   : _SetupView(
-                      subject: sub!,
+                      subject: sub,
                       chapterId: _chapterId,
                       pomodoroMode: _pomodoroMode,
                       quote: motivationalQuotes[_quote],
@@ -139,23 +149,20 @@ class _SetupView extends StatelessWidget {
               onPressed: () => showPomodoroSettings(context),
             ),
           ),
-        const SectionTitle('Subject'),
-        SizedBox(
-          height: 44,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            children: [
-              for (final s in store.subjects)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    label: Text('${s.emoji} ${s.name}'),
-                    selected: s.id == subject.id,
-                    selectedColor: s.colorValue.withValues(alpha: 0.25),
-                    onSelected: (_) => onSubject(s.id),
-                  ),
-                ),
-            ],
+        const SectionTitle("Today's pick"),
+        Card(
+          child: ListTile(
+            leading: SubjectAvatar(subject, size: 40),
+            title: Text(subject.name, style: const TextStyle(fontWeight: FontWeight.w800)),
+            subtitle: Builder(builder: (_) {
+              final task = store.selectedTask!;
+              return Text('${formatDuration(store.taskRemainingMs(store.todayKey, task))} left of '
+                  '${formatDuration(task.targetMs)} today');
+            }),
+            trailing: TextButton(
+              onPressed: BookNavigator.of(context)?.openBook,
+              child: const Text('Change'),
+            ),
           ),
         ),
         if (chapters.isNotEmpty) ...[
@@ -175,9 +182,11 @@ class _SetupView extends StatelessWidget {
           ),
           icon: const Icon(Icons.play_arrow_rounded, size: 28),
           label: Text(pomodoroMode ? 'Start Pomodoro' : 'Start focus'),
-          onPressed: () => pomodoroMode
-              ? store.startPomodoro(subject.id, chapterId)
-              : store.startTimer(subject.id, chapterId),
+          onPressed: () => showGateSnack(
+            context,
+            store,
+            pomodoroMode ? store.startPomodoro(subject.id, chapterId) : store.startTimer(subject.id, chapterId),
+          ),
         ),
         const SizedBox(height: 12),
         Center(
@@ -218,10 +227,14 @@ class _RunningView extends StatelessWidget {
       if (p.isBreak) ringColor = Colors.teal;
     } else {
       final live = store.liveMs;
-      progress = (live % 3600000) / 3600000;
+      final task = store.selectedTask;
+      progress = task != null && task.subjectId == subject.id
+          ? store.taskProgressMs(store.todayKey, task) / task.targetMs
+          : (live % 3600000) / 3600000;
       clock = formatClock(live);
       phaseLabel = 'Focusing';
     }
+    final left = store.timerRemainingMs;
 
     final cycles = store.settings.pomodoroCyclesBeforeLong;
     final doneInCycle = p == null ? 0 : p.completedWork % cycles;
@@ -265,7 +278,12 @@ class _RunningView extends StatelessWidget {
           ]),
         ),
         const SizedBox(height: 16),
-        Text('Today ${formatDuration(store.todayMs)}', style: TextStyle(color: scheme.onSurfaceVariant)),
+        Text(
+          left != null
+              ? '⏰ Alarm in ${formatClock(left)} — target ${formatDuration(store.selectedTask?.targetMs ?? 0)}'
+              : 'Today ${formatDuration(store.todayMs)}',
+          style: TextStyle(color: scheme.onSurfaceVariant, fontWeight: FontWeight.w600),
+        ),
         const Spacer(),
         Row(mainAxisAlignment: MainAxisAlignment.center, children: [
           if (p != null) ...[
