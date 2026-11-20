@@ -46,13 +46,18 @@ class _SubjectFormState extends State<_SubjectForm> {
   void _save() {
     final store = context.read<StudyStore>();
     final name = _name.text.trim();
-    final target = double.tryParse(_target.text.trim());
-    if (name.isEmpty) {
-      showSnack(context, 'Please enter a subject name');
+    final targetText = _target.text.trim();
+    final missing = [
+      if (name.isEmpty) 'Subject name',
+      if (targetText.isEmpty) 'Target hours',
+    ];
+    if (missing.isNotEmpty) {
+      showFillFieldsDialog(context, missingFieldsMessage(missing));
       return;
     }
+    final target = double.tryParse(targetText);
     if (target == null || target <= 0) {
-      showSnack(context, 'Target hours must be a positive number');
+      showFillFieldsDialog(context, 'Target hours must be a number above 0.');
       return;
     }
     if (widget.existing == null) {

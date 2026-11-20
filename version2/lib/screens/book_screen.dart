@@ -10,12 +10,13 @@ import '../logic/stats.dart';
 import '../models/models.dart';
 import '../state/study_store.dart';
 import '../widgets/common.dart';
-import '../widgets/gate.dart';
 import '../widgets/subject_form.dart';
 
 // ---------------------------------------------------------------- screen
 
-/// The To-Do book: one plain page per day, turned with a page-flip swipe.
+/// The To-Do book: one plain page per day. Pages turn like a notepad:
+/// pull up past the bottom of a page to flip it up to the next day, pull
+/// down past the top to bring the previous day back down.
 class BookScreen extends StatefulWidget {
   const BookScreen({super.key});
 
@@ -26,15 +27,17 @@ class BookScreen extends StatefulWidget {
 class _BookScreenState extends State<BookScreen> with SingleTickerProviderStateMixin {
   late String _key;
   String? _neighbor;
-  double _progress = 0; // >0 turning forward, <0 turning back
+  double _progress = 0; // >0 turning to the next page, <0 back to the previous
   late final AnimationController _turn;
   double _from = 0, _to = 0;
 
   @override
   void initState() {
     super.initState();
-    _key = context.read<StudyStore>().todayKey;
-    _turn = AnimationController(vsync: this, duration: const Duration(milliseconds: 420))
+    final store = context.read<StudyStore>();
+    // Reopen on the page that was open last time.
+    _key = store.bookPage ?? store.todayKey;
+    _turn = AnimationController(vsync: this, duration: const Duration(milliseconds: 460))
       ..addListener(() {
         setState(() => _progress = _from + (_to - _from) * Curves.easeInOutCubic.transform(_turn.value));
       })
@@ -55,6 +58,7 @@ class _BookScreenState extends State<BookScreen> with SingleTickerProviderStateM
       _progress = 0;
       _neighbor = null;
     });
+    context.read<StudyStore>().rememberBookPage(_key);
   }
 
   void _animateTo(double target) {
@@ -72,21 +76,43 @@ class _BookScreenState extends State<BookScreen> with SingleTickerProviderStateM
     _animateTo(_progress.sign);
   }
 
-  void _onDragUpdate(DragUpdateDetails d, double width) {
+  bool _dragging = false;
+
+  void _dragBy(double delta) {
     if (_turn.isAnimating) return;
-    final next = (_progress - d.delta.dx / width * 1.2).clamp(-1.0, 1.0);
-    if (next != 0 && (_neighbor == null || next.sign != _progress.sign)) {
-      _neighbor = addDays(_key, next > 0 ? 1 : -1);
+    var next = (_progress + delta).clamp(-1.0, 1.0);
+    // Turning back past flat ends the turn instead of flipping the other way.
+    if (_progress != 0 && next != 0 && next.sign != _progress.sign) next = 0;
+    if (next == 0) {
+      setState(() {
+        _progress = 0;
+        _neighbor = null;
+      });
+      return;
     }
+    if (_neighbor == null || _progress == 0) _neighbor = addDays(_key, next > 0 ? 1 : -1);
+    _dragging = true;
     setState(() => _progress = next);
   }
 
-  void _onDragEnd(DragEndDetails d) {
+  void _release() {
+    if (!_dragging) return;
+    _dragging = false;
     if (_turn.isAnimating || _progress == 0) return;
-    final v = -(d.primaryVelocity ?? 0);
-    final commit = _progress.abs() > 0.3 || (v.abs() > 500 && v.sign == _progress.sign);
+    final commit = _progress.abs() > 0.25;
     if (commit) HapticFeedback.selectionClick();
     _animateTo(commit ? _progress.sign : 0);
+  }
+
+  /// Pulling past the end of the page turns it; scrolling inside works as usual.
+  bool _onScroll(ScrollNotification n, double height) {
+    if (n.depth != 0 || _turn.isAnimating) return false;
+    if (n is OverscrollNotification && n.dragDetails != null) {
+      _dragBy(n.overscroll / height * 1.4);
+    } else if (n is ScrollUpdateNotification && n.dragDetails != null && _progress != 0) {
+      _dragBy((n.scrollDelta ?? 0) / height * 1.4);
+    }
+    return false;
   }
 
   Future<void> _pickDate() async {
@@ -106,17 +132,24 @@ class _BookScreenState extends State<BookScreen> with SingleTickerProviderStateM
 
     Widget page(String key) => RepaintBoundary(child: BookPage(dayKey: key, onPickDate: _pickDate));
 
-    // The turning page rotates around its left edge, like a real page.
-    Widget flipping(Widget child, double angle, double shade) => Transform(
-          alignment: Alignment.centerLeft,
+    // The turning page swings around its top edge, like a notepad page.
+    Widget flipping(Widget child, double t) => Transform(
+          alignment: Alignment.topCenter,
           transform: Matrix4.identity()
-            ..setEntry(3, 2, 0.0011)
-            ..rotateY(angle),
+            ..setEntry(3, 2, 0.0012)
+            ..rotateX(t * math.pi / 2),
           child: Stack(children: [
             child,
             Positioned.fill(
               child: IgnorePointer(
-                child: ColoredBox(color: Colors.black.withValues(alpha: shade * 0.25)),
+                // Matches the page card's margin and corners.
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: ColoredBox(color: Colors.black.withValues(alpha: t * 0.22)),
+                  ),
+                ),
               ),
             ),
           ]),
@@ -127,10 +160,11 @@ class _BookScreenState extends State<BookScreen> with SingleTickerProviderStateM
     if (_progress == 0 || n == null) {
       pages = page(_key);
     } else if (_progress > 0) {
-      pages = Stack(children: [page(n), flipping(page(_key), -_progress * math.pi / 2, _progress)]);
+      // Next day: this page flips up and away, revealing the next one.
+      pages = Stack(children: [page(n), flipping(page(_key), _progress)]);
     } else {
-      final b = -_progress;
-      pages = Stack(children: [page(_key), flipping(page(n), -(1 - b) * math.pi / 2, 1 - b)]);
+      // Previous day: that page swings back down over this one.
+      pages = Stack(children: [page(_key), flipping(page(n), 1 + _progress)]);
     }
 
     return Scaffold(
@@ -139,7 +173,7 @@ class _BookScreenState extends State<BookScreen> with SingleTickerProviderStateM
         actions: [
           IconButton(
             tooltip: 'Previous day',
-            icon: const Icon(Icons.chevron_left),
+            icon: const Icon(Icons.keyboard_arrow_up),
             onPressed: () => goTo(addDays(_key, -1)),
           ),
           IconButton(
@@ -149,7 +183,7 @@ class _BookScreenState extends State<BookScreen> with SingleTickerProviderStateM
           ),
           IconButton(
             tooltip: 'Next day',
-            icon: const Icon(Icons.chevron_right),
+            icon: const Icon(Icons.keyboard_arrow_down),
             onPressed: () => goTo(addDays(_key, 1)),
           ),
         ],
@@ -165,10 +199,17 @@ class _BookScreenState extends State<BookScreen> with SingleTickerProviderStateM
       body: LayoutBuilder(
         builder: (context, c) => Padding(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-          child: GestureDetector(
-            onHorizontalDragUpdate: (d) => _onDragUpdate(d, c.maxWidth),
-            onHorizontalDragEnd: _onDragEnd,
-            child: pages,
+          child: Listener(
+            onPointerUp: (_) => _release(),
+            onPointerCancel: (_) => _release(),
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (n) => _onScroll(n, c.maxHeight),
+              child: ScrollConfiguration(
+                // No stretch/glow at the page ends: pulling there turns the page.
+                behavior: ScrollConfiguration.of(context).copyWith(overscroll: false),
+                child: pages,
+              ),
+            ),
           ),
         ),
       ),
@@ -190,13 +231,11 @@ class BookPage extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final muted = scheme.onSurfaceVariant;
     final isToday = dayKey == store.todayKey;
-    final isPast = store.isPastDay(dayKey);
     final date = dateOfKey(dayKey);
     final plan = store.planFor(dayKey);
     final score = store.pageScore(dayKey);
     final status = store.pageStatus(dayKey);
     final quote = motivationalQuotes[dayKey.hashCode.abs() % motivationalQuotes.length];
-    final carry = isPast ? const <PlanTask>[] : store.carryOverCandidates(addDays(dayKey, -1), dayKey);
 
     return Card(
       elevation: 1.5,
@@ -205,6 +244,8 @@ class BookPage extends StatelessWidget {
       child: Column(children: [
         Expanded(
           child: ListView(
+            // Always scrollable, so pulling past either end can turn the page.
+            physics: const AlwaysScrollableScrollPhysics(parent: ClampingScrollPhysics()),
             padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
             children: [
               InkWell(
@@ -230,8 +271,6 @@ class BookPage extends StatelessWidget {
               ],
               const SizedBox(height: 10),
               Divider(height: 1, color: scheme.outlineVariant.withValues(alpha: 0.5)),
-              if (carry.isNotEmpty)
-                _CarryOverRow(fromKey: addDays(dayKey, -1), toKey: dayKey, count: carry.length),
               const SizedBox(height: 6),
               if (plan.tasks.isEmpty)
                 Padding(
@@ -240,7 +279,7 @@ class BookPage extends StatelessWidget {
                 )
               else
                 for (final t in plan.tasks) _TaskLine(dayKey: dayKey, task: t),
-              if (!isPast) _AddLine(dayKey: dayKey),
+              _AddLine(dayKey: dayKey),
               const SizedBox(height: 12),
               _NoteRow(dayKey: dayKey),
             ],
@@ -276,28 +315,6 @@ class _Pill extends StatelessWidget {
   }
 }
 
-class _CarryOverRow extends StatelessWidget {
-  final String fromKey;
-  final String toKey;
-  final int count;
-  const _CarryOverRow({required this.fromKey, required this.toKey, required this.count});
-
-  @override
-  Widget build(BuildContext context) {
-    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
-    return Row(children: [
-      Expanded(
-        child: Text('$count unfinished from the day before', style: TextStyle(fontSize: 12, color: muted)),
-      ),
-      TextButton(
-        style: TextButton.styleFrom(visualDensity: VisualDensity.compact, textStyle: const TextStyle(fontSize: 12)),
-        onPressed: () => context.read<StudyStore>().carryOverUnfinished(fromKey, toKey),
-        child: const Text('Carry over'),
-      ),
-    ]);
-  }
-}
-
 // ---------------------------------------------------------------- task line
 
 class _TaskLine extends StatelessWidget {
@@ -312,17 +329,16 @@ class _TaskLine extends StatelessWidget {
     final muted = scheme.onSurfaceVariant;
     final sub = store.subjectById(task.subjectId);
     if (sub == null) return const SizedBox.shrink();
-    final isToday = dayKey == store.todayKey;
     final isPast = store.isPastDay(dayKey);
     final progress = store.taskProgressMs(dayKey, task);
     final done = progress >= task.targetMs;
-    final selected = isToday && store.selectedTask?.id == task.id;
-    final running = selected && store.isRunning(sub.id);
+    final selected = store.isSelected(dayKey, task);
+    final running = store.activeTimer?.taskId == task.id;
 
     Future<void> onTap() async {
-      if (isPast) return;
-      if (isToday && !selected && !done) {
-        store.selectTask(task.id);
+      // Today's and future tasks can be picked (to work ahead).
+      if (!isPast && !selected && !done) {
+        store.selectTask(dayKey, task.id);
         return;
       }
       await _taskActions(context, dayKey, task);
@@ -348,7 +364,7 @@ class _TaskLine extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: onTap,
-          onLongPress: isPast ? null : () => _taskActions(context, dayKey, task),
+          onLongPress: () => _taskActions(context, dayKey, task),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -397,10 +413,10 @@ class _TaskLine extends StatelessWidget {
                     _MiniButton(
                       icon: running ? Icons.pause_rounded : Icons.play_arrow_rounded,
                       color: running ? scheme.error : sub.colorValue,
-                      onTap: () => showGateSnack(context, store, store.toggleTimer(sub.id)),
+                      onTap: () => store.toggleTimer(sub.id),
                     ),
                   ],
-                  if (done && !isPast)
+                  if (done)
                     TextButton(
                       style: TextButton.styleFrom(
                           visualDensity: VisualDensity.compact, textStyle: const TextStyle(fontSize: 12)),
@@ -441,8 +457,8 @@ Future<void> _taskActions(BuildContext context, String dayKey, PlanTask task) as
   final store = context.read<StudyStore>();
   final sub = store.subjectById(task.subjectId);
   if (sub == null) return;
-  final isToday = dayKey == store.todayKey;
-  final selected = isToday && store.selectedTask?.id == task.id;
+  final isPast = store.isPastDay(dayKey);
+  final selected = store.isSelected(dayKey, task);
   final done = store.isTaskDone(dayKey, task);
   final choice = await showModalBottomSheet<String>(
     context: context,
@@ -454,7 +470,7 @@ Future<void> _taskActions(BuildContext context, String dayKey, PlanTask task) as
           subtitle: Text('Target ${formatDuration(task.targetMs)} · studied '
               '${formatDuration(store.taskProgressMs(dayKey, task))}'),
         ),
-        if (isToday && !selected && !done)
+        if (!isPast && !selected && !done)
           ListTile(
             leading: const Icon(Icons.push_pin_outlined),
             title: const Text('Pick this task'),
@@ -463,7 +479,7 @@ Future<void> _taskActions(BuildContext context, String dayKey, PlanTask task) as
         if (selected)
           ListTile(
             leading: const Icon(Icons.push_pin),
-            title: const Text('Unpick (stops its timer)'),
+            title: const Text('Unpick'),
             onTap: () => Navigator.pop(ctx, 'unselect'),
           ),
         ListTile(
@@ -487,7 +503,7 @@ Future<void> _taskActions(BuildContext context, String dayKey, PlanTask task) as
   if (!context.mounted) return;
   switch (choice) {
     case 'select':
-      store.selectTask(task.id);
+      store.selectTask(dayKey, task.id);
     case 'unselect':
       store.clearSelection();
     case 'extend':
@@ -586,21 +602,22 @@ class _AddTaskSheetState extends State<_AddTaskSheet> {
               style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
               icon: const Icon(Icons.add),
               label: const Text('Add'),
-              onPressed: _subjectId == null
-                  ? null
-                  : () {
-                      final r = store.addPlanTask(widget.dayKey, _subjectId!, _minutes * 60000);
-                      if (r == PlanResult.ok) {
-                        Navigator.pop(context);
-                      } else {
-                        showSnack(context, switch (r) {
-                          PlanResult.duplicateSubject => 'That subject is already on this page',
-                          PlanResult.invalidTarget => 'Pick between 1 minute and 24 hours',
-                          PlanResult.pastDay => 'You can\'t change the past 🙂',
-                          _ => 'Could not add that subject',
-                        });
-                      }
-                    },
+              onPressed: () {
+                if (_subjectId == null) {
+                  showFillFieldsDialog(context, 'Please pick a subject.');
+                  return;
+                }
+                final r = store.addPlanTask(widget.dayKey, _subjectId!, _minutes * 60000);
+                if (r == PlanResult.ok) {
+                  Navigator.pop(context);
+                } else {
+                  showFillFieldsDialog(context, switch (r) {
+                    PlanResult.duplicateSubject => 'That subject is already on this page.',
+                    PlanResult.invalidTarget => 'Pick a time between 1 minute and 24 hours.',
+                    _ => 'Could not add that subject.',
+                  });
+                }
+              },
             ),
           ),
         ]),
@@ -727,7 +744,7 @@ class _NoteRow extends StatelessWidget {
       InkWell(
         borderRadius: BorderRadius.circular(8),
         onTap: () async {
-          final t = await promptText(context, title: 'Note', initial: plan.note);
+          final t = await promptText(context, title: 'Note', initial: plan.note, required: false);
           if (t != null) store.setDayNote(dayKey, t);
         },
         child: Padding(

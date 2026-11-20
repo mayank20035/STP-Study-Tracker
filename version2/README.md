@@ -4,24 +4,23 @@
 
 Version 2 of **STP**, rebuilt from scratch in **Flutter / Material 3**.
 
-## 📖 New in v2.1 — the To-Do Book
+## 📖 New in v2.2 — a simpler, freer To-Do Book
 
 | Today's page | A past day | Target reached |
 |:---:|:---:|:---:|
 | <img src="screenshots/book_today.jpg" width="200"> | <img src="screenshots/book_yesterday.jpg" width="200"> | <img src="screenshots/alarm.jpg" width="200"> |
 
-The app now opens on a simple **To-Do Book**. Every page is one day, and today's page opens first.
+The app opens on a simple **To-Do Book**, one page per day. It reopens on the page you left it on.
 
-1. **Plan:** tap *Add subject*, choose one of your subjects and set how long to study it (e.g. Physics 2h, Maths 1h 30m).
-2. **Pick:** tap a subject on today's page. Only then does its timer unlock, on the page itself, on **Today** and on **Focus**. Every other subject shows a 🔒.
-3. **Study:** start the stopwatch or a Pomodoro. The page shows the time left and a progress bar.
-4. **Alarm:** when the target is reached, the timer **stops by itself** at the exact second and an **alarm rings until you press STOP**. This also works when the app is closed or the phone is locked, because the alarm is scheduled as a notification with a custom chime, vibration and a lock-screen alert. There's also *Stop & keep going +15 min*.
+1. **Plan:** tap *Add subject*, choose one of your subjects and set how long to study it (e.g. Physics 2h, Maths 1h 30m). Any page works: today, a future day, or a past day to log time you already studied.
+2. **Study:** timers are free. Start any subject from **Today** or **Focus** whenever you like; the time counts on that day's page automatically, even if you add the subject to the page later.
+3. **Pick (optional):** tap a task on today's page **or a future page** to work ahead. A timer for that subject then counts toward that page and shows the time left.
+4. **Alarm:** when a picked task's target is reached, the timer **stops by itself** at the exact second and an **alarm rings until you press STOP**. This also works when the app is closed or the phone is locked, because the alarm is scheduled as a notification with a custom chime, vibration and a lock-screen alert. There's also *Stop & keep going +15 min*.
 
 The page:
-- clean pages that turn with a 3D page-flip swipe (or the arrows / date picker)
-- a small Done / Partial / Missed label on past days; past pages are read-only
+- turns like a notepad: pull up past the bottom of a page for the next day, pull down past the top for the previous day (or use the arrows / date picker)
+- a small Done / Partial / Missed label on past days
 - a note and mood for each day
-- plan future days ahead, and carry over yesterday's unfinished tasks with their remaining time
 - the daily quote sits at the very bottom of the page
 
 Details and the edge-case rules are in [TODO_BOOK_PLAN.md](TODO_BOOK_PLAN.md).
@@ -33,14 +32,14 @@ Details and the edge-case rules are in [TODO_BOOK_PLAN.md](TODO_BOOK_PLAN.md).
 *The icon: a stopwatch whose ring fills from white to gold as you study, wrapped around an open book with a golden "aha" spark.*
 The original React Native app (v1) lives in the repository root on the `main` branch and is untouched.
 
-## 📥 Download the APK (v2.1.0)
+## 📥 Download the APK (v2.2.0)
 
 | APK | Size | For |
 |---|---|---|
-| [**STP-v2.1.0-arm64.apk**](https://github.com/mayank20035/STP-Study-Tracker/releases/download/v2.1.0/STP-v2.1.0-arm64.apk) | 20.7 MB | Almost every modern Android phone (recommended) |
-| [**STP-v2.1.0-universal.apk**](https://github.com/mayank20035/STP-Study-Tracker/releases/download/v2.1.0/STP-v2.1.0-universal.apk) | 57.3 MB | Any Android device |
+| [**STP-v2.2.0-arm64.apk**](https://github.com/mayank20035/STP-Study-Tracker/releases/download/v2.2.0/STP-v2.2.0-arm64.apk) | 20.9 MB | Almost every modern Android phone (recommended) |
+| [**STP-v2.2.0-universal.apk**](https://github.com/mayank20035/STP-Study-Tracker/releases/download/v2.2.0/STP-v2.2.0-universal.apk) | 57.2 MB | Any Android device |
 
-Release notes: [v2.1.0 release page](https://github.com/mayank20035/STP-Study-Tracker/releases/tag/v2.1.0).
+Release notes: [v2.2.0 release page](https://github.com/mayank20035/STP-Study-Tracker/releases/tag/v2.2.0).
 
 The first time you start a timer, allow notifications so the target alarm can ring.
 

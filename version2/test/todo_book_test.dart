@@ -111,6 +111,8 @@ void main() {
     return store.planFor(day).taskForSubject(s.id)!.id;
   }
 
+  bool pick(String id, [String day = today]) => store.selectTask(day, id);
+
   // ---------------------------------------------------------------- adding
   group('adding tasks to a page', () {
     test('valid task appears on the page', () {
@@ -140,21 +142,23 @@ void main() {
       expect(store.planFor(today).tasks, hasLength(1));
     });
 
-    test('past pages are read-only, future pages can be planned', () {
-      expect(store.addPlanTask(yesterday, physics.id, hour), PlanResult.pastDay);
-      expect(store.addPlanTask(tomorrow, physics.id, hour), PlanResult.ok);
-      final id = store.planFor(tomorrow).tasks.single.id;
-      expect(store.updatePlanTaskTarget(tomorrow, id, 2 * hour), PlanResult.ok);
+    test('past and future pages can both be planned and edited', () {
+      final past = addTask(physics, hour, yesterday);
+      expect(store.updatePlanTaskTarget(yesterday, past, 2 * hour), PlanResult.ok);
+      expect(store.removePlanTask(yesterday, past), PlanResult.ok);
+      final future = addTask(physics, hour, tomorrow);
+      expect(store.updatePlanTaskTarget(tomorrow, future, 2 * hour), PlanResult.ok);
     });
 
-    test('editing or removing a past task is refused', () {
-      final data = h.storage.data;
-      data.subjects.addAll(store.subjects);
-      store.data.plans[yesterday] =
-          DayPlan(dayKey: yesterday, tasks: [PlanTask(id: 'old', subjectId: physics.id, targetMs: hour)]);
-      expect(store.updatePlanTaskTarget(yesterday, 'old', 2 * hour), PlanResult.pastDay);
-      expect(store.removePlanTask(yesterday, 'old'), PlanResult.pastDay);
-      expect(store.planFor(yesterday).tasks, hasLength(1));
+    test('time studied earlier shows up when the task is added later', () {
+      store.addSession(StudySession(
+          id: 'y',
+          subjectId: physics.id,
+          startMs: DateTime(2026, 3, 9, 18).millisecondsSinceEpoch,
+          endMs: DateTime(2026, 3, 9, 18, 45).millisecondsSinceEpoch,
+          manual: true));
+      final id = addTask(physics, hour, yesterday);
+      expect(store.taskProgressMs(yesterday, store.planFor(yesterday).taskById(id)!), 45 * min);
     });
 
     test('unknown task ids report notFound', () {
@@ -163,80 +167,154 @@ void main() {
     });
   });
 
-  // ---------------------------------------------------------------- gate
-  group('timer gate', () {
-    test('no timer can start without picking a task', () {
-      expect(store.startTimer(physics.id), StartGate.noTaskSelected);
-      expect(store.startPomodoro(physics.id), StartGate.noTaskSelected);
-      expect(store.toggleTimer(physics.id), StartGate.noTaskSelected);
-      expect(store.activeTimer, isNull);
+  // ---------------------------------------------------------------- free timers
+  group('timers without a pick', () {
+    test('any subject can be timed without picking a task', () {
+      store.startTimer(physics.id);
+      expect(store.activeTimer, isNotNull);
+      expect(store.activeTimer!.isLinked, isFalse);
+      expect(store.timerRemainingMs, isNull);
+      expect(h.alarms.scheduledAt, isNull, reason: 'no target, no alarm');
+      store.toggleTimer(physics.id);
+      store.startPomodoro(maths.id);
+      expect(store.pomodoro, isNotNull);
     });
 
-    test('only the picked subject can be timed (any chapter)', () {
+    test('free time counts toward that day\'s task, even when added afterwards', () {
+      store.startTimer(physics.id);
+      h.clock.advance(const Duration(minutes: 40));
+      store.stopTimer();
       final id = addTask(physics, hour);
-      addTask(maths, hour);
-      expect(store.selectTask(id), StartGate.ok);
-      expect(store.startTimer(maths.id), StartGate.wrongSubject);
-      expect(store.activeTimer, isNull);
-      expect(store.startTimer(physics.id, 'kin'), StartGate.ok);
-      expect(store.activeTimer!.chapterId, 'kin');
-      expect(store.startTimer(physics.id), StartGate.ok, reason: 'switching chapter within subject');
-      expect(store.activeTimer!.chapterId, isNull);
+      expect(store.taskProgressMs(today, store.planFor(today).taskById(id)!), 40 * min);
+    });
+
+    test('a free timer keeps running past the 5 AM boundary', () async {
+      final late = await makeHarness(at: DateTime(2026, 3, 10, 22));
+      final s = late.store;
+      final p = s.addSubject(name: 'P', targetHours: 10);
+      s.startTimer(p.id);
+      late.clock.set(DateTime(2026, 3, 11, 5, 30));
+      s.tick();
+      expect(s.activeTimer, isNotNull);
+      s.stopTimer();
+      expect(s.subjectDayMs(p.id, today), 7 * hour);
+      expect(s.subjectDayMs(p.id, tomorrow), 30 * min);
     });
 
     test('stopping is always allowed', () {
       final id = addTask(physics, hour);
-      store.selectTask(id);
+      pick(id);
       store.startTimer(physics.id);
       h.clock.advance(const Duration(minutes: 5));
-      expect(store.toggleTimer(physics.id), StartGate.ok);
+      store.toggleTimer(physics.id);
       expect(store.activeTimer, isNull);
       expect(store.sessions.single.durationMs, 5 * min);
     });
 
     test('starting a timer asks for alarm permissions', () {
-      final id = addTask(physics, hour);
-      store.selectTask(id);
       store.startTimer(physics.id);
       expect(h.alarms.permissionAsks, 1);
     });
+  });
 
-    test('tasks can only be picked from today\'s page', () {
+  // ---------------------------------------------------------------- picking
+  group('picking a task', () {
+    test('a pick links only its own subject\'s timer', () {
+      final id = addTask(physics, hour);
+      addTask(maths, hour);
+      expect(pick(id), isTrue);
+      store.startTimer(maths.id);
+      expect(store.activeTimer!.isLinked, isFalse);
+      expect(h.alarms.scheduledAt, isNull);
+      store.startTimer(physics.id, 'kin');
+      expect(store.activeTimer!.isLinked, isTrue);
+      expect(store.activeTimer!.chapterId, 'kin');
+      expect(store.linkedTask?.id, id);
+      expect(h.alarms.scheduledAt, isNotNull);
+    });
+
+    test('future tasks can be picked and finished ahead of time', () {
+      final todayTask = addTask(physics, hour);
       final future = addTask(physics, hour, tomorrow);
-      expect(store.selectTask(future), StartGate.noTaskSelected);
-      expect(store.selectTask('missing'), StartGate.noTaskSelected);
+      expect(pick(future, tomorrow), isTrue);
+      expect(store.selectedTaskDay, tomorrow);
+      store.startTimer(physics.id);
+      h.clock.advance(const Duration(minutes: 20));
+      store.stopTimer();
+      final ses = store.sessions.single;
+      expect(ses.planDay, tomorrow);
+      expect(store.taskProgressMs(tomorrow, store.planFor(tomorrow).taskById(future)!), 20 * min);
+      expect(store.taskProgressMs(today, store.planFor(today).taskById(todayTask)!), 0,
+          reason: 'time for tomorrow does not count on today\'s page');
+      expect(store.subjectTodayMs(physics.id), 20 * min, reason: 'it was still studied today');
+    });
+
+    test('a future task rings its alarm at the target', () {
+      final future = addTask(physics, 30 * min, tomorrow);
+      pick(future, tomorrow);
+      store.startTimer(physics.id);
+      expect(store.timerRemainingMs, 30 * min);
+      h.clock.advance(const Duration(minutes: 31));
+      store.tick();
+      expect(store.activeTimer, isNull);
+      expect(store.alarm?.dayKey, tomorrow);
+      expect(store.isTaskDone(tomorrow, store.planFor(tomorrow).taskById(future)!), isTrue);
+    });
+
+    test('past, finished and unknown tasks cannot be picked', () {
+      final past = addTask(physics, hour, yesterday);
+      expect(pick(past, yesterday), isFalse);
+      expect(pick('missing'), isFalse);
+      final id = addTask(maths, 30 * min);
+      store.addSession(StudySession(
+          id: 'm',
+          subjectId: maths.id,
+          startMs: nine.millisecondsSinceEpoch - hour,
+          endMs: nine.millisecondsSinceEpoch,
+          manual: true));
+      expect(pick(id), isFalse);
       expect(store.selectedTask, isNull);
     });
 
-    test('a finished task cannot be picked or started', () {
-      final id = addTask(physics, 30 * min);
-      store.addSession(StudySession(
-          id: 'm', subjectId: physics.id, startMs: nine.millisecondsSinceEpoch - hour, endMs: nine.millisecondsSinceEpoch, manual: true));
-      expect(store.selectTask(id), StartGate.targetReached);
-    });
-
-    test('switching task stops the other subject\'s timer and saves it', () {
+    test('picking another subject\'s task stops a linked timer and saves it', () {
       final a = addTask(physics, hour);
       final b = addTask(maths, hour);
-      store.selectTask(a);
+      pick(a);
       store.startTimer(physics.id);
       h.clock.advance(const Duration(minutes: 12));
-      expect(store.selectTask(b), StartGate.ok);
+      expect(pick(b), isTrue);
       expect(store.activeTimer, isNull);
-      expect(store.sessions.single.subjectId, physics.id);
       expect(store.sessions.single.durationMs, 12 * min);
-      expect(store.canStart(maths.id), StartGate.ok);
-      expect(store.canStart(physics.id), StartGate.wrongSubject);
     });
 
-    test('clearing the selection stops its timer', () {
+    test('picking a task while a free timer of its subject runs links it from now on', () {
+      final id = addTask(physics, hour);
+      store.startTimer(physics.id);
+      h.clock.advance(const Duration(minutes: 10));
+      pick(id);
+      expect(store.activeTimer!.isLinked, isTrue);
+      expect(store.sessions.single.durationMs, 10 * min);
+      expect(store.timerRemainingMs, 50 * min);
+    });
+
+    test('picking a task leaves a free timer of another subject running', () {
+      final id = addTask(physics, hour);
+      store.startTimer(maths.id);
+      pick(id);
+      expect(store.activeTimer?.subjectId, maths.id);
+      expect(store.activeTimer!.isLinked, isFalse);
+    });
+
+    test('unpicking keeps the timer running as a free timer', () {
       final a = addTask(physics, hour);
-      store.selectTask(a);
+      pick(a);
       store.startTimer(physics.id);
       h.clock.advance(const Duration(minutes: 3));
       store.clearSelection();
-      expect(store.activeTimer, isNull);
-      expect(store.canStart(physics.id), StartGate.noTaskSelected);
+      expect(store.activeTimer, isNotNull);
+      expect(store.activeTimer!.isLinked, isFalse);
+      expect(store.sessions.single.durationMs, 3 * min);
+      expect(h.alarms.scheduledAt, isNull);
     });
   });
 
@@ -244,7 +322,7 @@ void main() {
   group('auto-stop when the target is reached', () {
     test('stops exactly at the target and rings the alarm', () {
       final id = addTask(physics, hour);
-      store.selectTask(id);
+      pick(id);
       store.startTimer(physics.id);
       final start = h.clock.ms;
       expect(h.alarms.scheduledAt, DateTime.fromMillisecondsSinceEpoch(start + hour));
@@ -262,8 +340,11 @@ void main() {
       expect(store.alarm!.taskId, id);
       expect(h.alarms.rings, 1);
       expect(store.isTaskDone(today, store.selectedTask!), isTrue);
-      expect(store.canStart(physics.id), StartGate.targetReached);
-      expect(store.startTimer(physics.id), StartGate.targetReached);
+
+      // Studying more after the target is allowed, as a free timer.
+      store.startTimer(physics.id);
+      expect(store.activeTimer!.isLinked, isFalse);
+      expect(store.timerRemainingMs, isNull);
     });
 
     test('earlier and manual sessions of the day count towards the target', () {
@@ -274,7 +355,7 @@ void main() {
           startMs: DateTime(2026, 3, 10, 6).millisecondsSinceEpoch,
           endMs: DateTime(2026, 3, 10, 6, 40).millisecondsSinceEpoch,
           manual: true));
-      store.selectTask(id);
+      pick(id);
       store.startTimer(physics.id);
       expect(store.timerRemainingMs, 20 * min);
       h.clock.advance(const Duration(minutes: 20));
@@ -291,25 +372,24 @@ void main() {
           startMs: DateTime(2026, 3, 9, 20).millisecondsSinceEpoch,
           endMs: DateTime(2026, 3, 9, 22).millisecondsSinceEpoch,
           manual: true));
-      expect(store.selectTask(id), StartGate.ok);
+      expect(pick(id), isTrue);
       expect(store.taskProgressMs(today, store.selectedTask!), 0);
     });
 
     test('a manual stop cancels the scheduled alarm', () {
       final id = addTask(physics, hour);
-      store.selectTask(id);
+      pick(id);
       store.startTimer(physics.id);
       expect(h.alarms.scheduledAt, isNotNull);
       h.clock.advance(const Duration(minutes: 10));
       store.stopTimer();
       expect(h.alarms.scheduledAt, isNull);
       expect(store.alarm, isNull);
-      expect(store.canStart(physics.id), StartGate.ok);
     });
 
     test('restarting reschedules the alarm for the remaining time', () {
       final id = addTask(physics, hour);
-      store.selectTask(id);
+      pick(id);
       store.startTimer(physics.id);
       h.clock.advance(const Duration(minutes: 40));
       store.stopTimer();
@@ -320,7 +400,7 @@ void main() {
 
     test('app closed past the target: session trimmed, alarm kept while notification rings', () async {
       final id = addTask(physics, hour);
-      store.selectTask(id);
+      pick(id);
       store.startTimer(physics.id);
       final start = h.clock.ms;
       final h2 = await h.reopen(after: const Duration(hours: 3), notificationRinging: true);
@@ -333,7 +413,7 @@ void main() {
 
     test('app closed past the target and alarm already stopped from the notification', () async {
       final id = addTask(physics, hour);
-      store.selectTask(id);
+      pick(id);
       store.startTimer(physics.id);
       final h2 = await h.reopen(after: const Duration(hours: 2), notificationRinging: false);
       expect(h2.store.activeTimer, isNull);
@@ -343,12 +423,23 @@ void main() {
 
     test('a timer still below target keeps running after reopening', () async {
       final id = addTask(physics, 2 * hour);
-      store.selectTask(id);
+      pick(id);
       store.startTimer(physics.id);
       final h2 = await h.reopen(after: const Duration(minutes: 30));
       expect(h2.store.activeTimer, isNotNull);
+      expect(h2.store.activeTimer!.isLinked, isTrue);
       expect(h2.store.timerRemainingMs, 90 * min);
       expect(h2.alarms.scheduledAt, DateTime.fromMillisecondsSinceEpoch(h2.clock.ms + 90 * min));
+    });
+
+    test('a linked timer for a future page survives reopening', () async {
+      final future = addTask(physics, hour, tomorrow);
+      pick(future, tomorrow);
+      store.startTimer(physics.id);
+      final h2 = await h.reopen(after: const Duration(minutes: 15));
+      expect(h2.store.timerRemainingMs, 45 * min);
+      h2.store.stopTimer();
+      expect(h2.store.sessions.single.planDay, tomorrow);
     });
   });
 
@@ -356,7 +447,7 @@ void main() {
   group('editing while a timer runs', () {
     test('lowering the target below progress stops now and rings, keeping real time', () {
       final id = addTask(physics, 2 * hour);
-      store.selectTask(id);
+      pick(id);
       store.startTimer(physics.id);
       h.clock.advance(const Duration(minutes: 50));
       expect(store.updatePlanTaskTarget(today, id, 30 * min), PlanResult.ok);
@@ -367,7 +458,7 @@ void main() {
 
     test('raising the target keeps it running and moves the alarm', () {
       final id = addTask(physics, hour);
-      store.selectTask(id);
+      pick(id);
       store.startTimer(physics.id);
       final start = h.clock.ms;
       h.clock.advance(const Duration(minutes: 30));
@@ -382,13 +473,14 @@ void main() {
       expect(store.planFor(today).taskById(id)!.targetMs, hour);
     });
 
-    test('removing the running task stops it, saves the time and clears the pick', () {
+    test('removing the running task keeps timing freely and clears the pick', () {
       final id = addTask(physics, hour);
-      store.selectTask(id);
+      pick(id);
       store.startTimer(physics.id);
       h.clock.advance(const Duration(minutes: 15));
       expect(store.removePlanTask(today, id), PlanResult.ok);
-      expect(store.activeTimer, isNull);
+      expect(store.activeTimer, isNotNull);
+      expect(store.activeTimer!.isLinked, isFalse);
       expect(store.sessions.single.durationMs, 15 * min);
       expect(store.selectedTask, isNull);
       expect(h.alarms.scheduledAt, isNull);
@@ -398,7 +490,7 @@ void main() {
       final id = addTask(physics, hour);
       addTask(physics, hour, tomorrow);
       addTask(maths, hour);
-      store.selectTask(id);
+      pick(id);
       store.deleteSubject(physics.id);
       expect(store.planFor(today).tasks.map((t) => t.subjectId), [maths.id]);
       expect(store.planFor(tomorrow).tasks, isEmpty);
@@ -410,7 +502,7 @@ void main() {
   group('alarm', () {
     Future<String> reachTarget() async {
       final id = addTask(physics, 30 * min);
-      store.selectTask(id);
+      pick(id);
       store.startTimer(physics.id);
       h.clock.advance(const Duration(minutes: 30));
       store.tick();
@@ -427,10 +519,10 @@ void main() {
 
     test('+15 min stops the alarm and lets the task continue', () async {
       final id = await reachTarget();
-      expect(store.extendAfterAlarm(15), StartGate.ok);
+      expect(store.extendAfterAlarm(15), isTrue);
       expect(store.alarm, isNull);
       expect(store.planFor(today).taskById(id)!.targetMs, 45 * min);
-      expect(store.startTimer(physics.id), StartGate.ok);
+      store.startTimer(physics.id);
       expect(store.timerRemainingMs, 15 * min);
     });
 
@@ -438,7 +530,9 @@ void main() {
       final id = await reachTarget();
       store.stopAlarm();
       expect(store.extendTask(today, id, 30), PlanResult.ok);
-      expect(store.canStart(physics.id), StartGate.ok);
+      store.startTimer(physics.id);
+      expect(store.activeTimer!.isLinked, isTrue);
+      expect(store.timerRemainingMs, 30 * min);
     });
 
     test('the ringing alarm survives an app restart', () async {
@@ -454,15 +548,16 @@ void main() {
   group('pomodoro with a target', () {
     test('break time does not count and the target ends the pomodoro', () {
       final id = addTask(physics, 30 * min);
-      store.selectTask(id);
-      expect(store.startPomodoro(physics.id), StartGate.ok);
+      pick(id);
+      store.startPomodoro(physics.id);
       h.clock.advance(const Duration(minutes: 25));
       store.tick(); // focus block done -> short break
       expect(store.pomodoro!.phase, PomodoroPhase.shortBreak);
       expect(store.activeTimer, isNull);
       h.clock.advance(const Duration(minutes: 5));
-      store.tick(); // break over -> next focus block auto-starts
+      store.tick(); // break over -> next focus block auto-starts, still linked
       expect(store.pomodoro!.phase, PomodoroPhase.work);
+      expect(store.activeTimer!.isLinked, isTrue);
       h.clock.advance(const Duration(minutes: 6));
       store.tick();
       expect(store.pomodoro, isNull);
@@ -474,7 +569,7 @@ void main() {
 
     test('target inside the first focus block ends it early', () {
       final id = addTask(physics, 10 * min);
-      store.selectTask(id);
+      pick(id);
       store.startPomodoro(physics.id);
       h.clock.advance(const Duration(minutes: 11));
       store.tick();
@@ -482,9 +577,18 @@ void main() {
       expect(store.sessions.single.durationMs, 10 * min);
     });
 
+    test('a pomodoro without a pick runs freely', () {
+      store.startPomodoro(physics.id);
+      h.clock.advance(const Duration(minutes: 25));
+      store.tick();
+      expect(store.pomodoro!.phase, PomodoroPhase.shortBreak);
+      expect(store.sessions.single.durationMs, 25 * min);
+      expect(store.alarm, isNull);
+    });
+
     test('closed during a pomodoro past the target', () async {
       final id = addTask(physics, 40 * min);
-      store.selectTask(id);
+      pick(id);
       store.startPomodoro(physics.id);
       final h2 = await h.reopen(after: const Duration(hours: 2), notificationRinging: true);
       expect(h2.store.pomodoro, isNull);
@@ -494,12 +598,12 @@ void main() {
 
   // ---------------------------------------------------------------- day change
   group('new day', () {
-    test('timer stops at the 5 AM boundary and the pick is cleared', () async {
+    test('a timer linked to today\'s task stops when the page is over', () async {
       final late = await makeHarness(at: DateTime(2026, 3, 10, 22));
       final s = late.store;
       final p = s.addSubject(name: 'P', targetHours: 10);
       expect(s.addPlanTask(today, p.id, 10 * hour), PlanResult.ok);
-      s.selectTask(s.planFor(today).tasks.single.id);
+      s.selectTask(today, s.planFor(today).tasks.single.id);
       s.startTimer(p.id);
       late.clock.set(DateTime(2026, 3, 11, 5, 30));
       s.tick();
@@ -508,7 +612,6 @@ void main() {
       expect(s.taskProgressMs(today, s.planFor(today).tasks.single), 7 * hour);
       expect(s.selectedTask, isNull);
       expect(s.alarm, isNull);
-      expect(s.canStart(p.id), StartGate.noTaskSelected);
     });
 
     test('after midnight but before 5 AM it is still the same page', () async {
@@ -518,10 +621,17 @@ void main() {
 
     test('a selection from yesterday is dropped on reopen', () async {
       final id = addTask(physics, hour);
-      store.selectTask(id);
+      pick(id);
       final h2 = await h.reopen(after: const Duration(days: 1));
       expect(h2.store.selectedTask, isNull);
-      expect(h2.store.canStart(physics.id), StartGate.noTaskSelected);
+    });
+
+    test('a pick on a future page is kept when that day arrives', () async {
+      final future = addTask(physics, hour, tomorrow);
+      pick(future, tomorrow);
+      final h2 = await h.reopen(after: const Duration(days: 1));
+      expect(h2.store.todayKey, tomorrow);
+      expect(h2.store.selectedTask?.id, future);
     });
   });
 
@@ -549,17 +659,6 @@ void main() {
       ]);
       return d;
     }
-
-    test('carry over copies only unfinished tasks with the remaining time', () async {
-      final p = await makeHarness(data: pastData());
-      expect(p.store.carryOverCandidates(yesterday, today).map((t) => t.id), ['ta']);
-      expect(p.store.carryOverUnfinished(yesterday, today), 1);
-      final t = p.store.planFor(today).tasks.single;
-      expect(t.subjectId, 'a');
-      expect(t.targetMs, 40 * min);
-      expect(p.store.carryOverUnfinished(yesterday, today), 0, reason: 'no duplicates');
-      expect(p.store.carryOverUnfinished(today, yesterday), 0, reason: 'cannot write the past');
-    });
 
     test('page status and score', () async {
       final p = await makeHarness(data: pastData());
@@ -606,21 +705,36 @@ void main() {
     test('plans and the pick round-trip through JSON', () async {
       final id = addTask(physics, 90 * min);
       addTask(maths, hour, tomorrow);
-      store.selectTask(id);
+      pick(id);
       final h2 = await h.reopen();
       expect(h2.store.planFor(today).tasks.single.targetMs, 90 * min);
       expect(h2.store.planFor(tomorrow).tasks, hasLength(1));
       expect(h2.store.selectedTask?.id, id);
     });
 
+    test('the last open book page is remembered', () async {
+      expect(store.bookPage, isNull);
+      store.rememberBookPage('2026-03-14');
+      final h2 = await h.reopen();
+      expect(h2.store.bookPage, '2026-03-14');
+    });
+
     test('older backups without a book still load', () {
       final json = AppData().toJson()
         ..remove('plans')
         ..remove('selectedTaskId')
-        ..remove('alarm');
+        ..remove('alarm')
+        ..remove('bookPage');
       final d = AppData.fromJson(json);
       expect(d.plans, isEmpty);
       expect(d.alarm, isNull);
+      expect(d.bookPage, isNull);
+    });
+
+    test('a session\'s page tag round-trips and is omitted when unset', () {
+      final s = StudySession(id: '1', subjectId: 'a', startMs: 0, endMs: 1, planDay: tomorrow);
+      expect(StudySession.fromJson(s.toJson()).planDay, tomorrow);
+      expect(StudySession(id: '2', subjectId: 'a', startMs: 0, endMs: 1).toJson().containsKey('d'), isFalse);
     });
 
     test('empty pages are not written to storage', () {
@@ -630,7 +744,7 @@ void main() {
 
     test('importing a backup clears a ringing alarm and a stale pick', () {
       final id = addTask(physics, 10 * min);
-      store.selectTask(id);
+      pick(id);
       store.startTimer(physics.id);
       h.clock.advance(const Duration(minutes: 10));
       store.tick();

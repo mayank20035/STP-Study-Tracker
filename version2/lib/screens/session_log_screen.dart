@@ -260,7 +260,7 @@ class _SessionEditorState extends State<_SessionEditor> {
                   label: const Text('Save session'),
                   onPressed: () {
                     if (end.isAfter(DateTime.now().add(const Duration(minutes: 1)))) {
-                      showSnack(context, 'A session cannot end in the future');
+                      showFillFieldsDialog(context, 'A session cannot end in the future.');
                       return;
                     }
                     final s = StudySession(

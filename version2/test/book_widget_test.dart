@@ -77,11 +77,32 @@ void main() {
     await tester.tap(find.text('Physics'));
     await tester.pump();
     expect(store.selectedTask?.id, tasks.single.id);
-    expect(store.canStart(store.subjects.single.id), StartGate.ok);
+    expect(store.selectedTaskDay, store.todayKey);
     await tester.pump(const Duration(seconds: 10)); // let the snackbar timer finish
   });
 
-  testWidgets('without a picked task the Today play button is locked', (tester) async {
+  testWidgets('the book reopens on the page that was open last', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2340);
+    tester.view.devicePixelRatio = 2.6;
+    addTearDown(tester.view.reset);
+    final store = await _store(now);
+    final later = now.add(const Duration(days: 3));
+    store.rememberBookPage(DateFormat('yyyy-MM-dd').format(later));
+    await tester.pumpWidget(_wrap(store, const BookScreen()));
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.text(DateFormat('EEEE').format(later)), findsOneWidget);
+    expect(find.text('Today'), findsNothing);
+
+    // The arrow turns the page back; the book then remembers that page.
+    await tester.tap(find.byTooltip('Previous day'));
+    await tester.pumpAndSettle();
+    final before = now.add(const Duration(days: 2));
+    expect(find.text(DateFormat('EEEE').format(before)), findsOneWidget);
+    expect(store.bookPage, DateFormat('yyyy-MM-dd').format(before));
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('without a picked task the Today play button starts a free timer', (tester) async {
     tester.view.physicalSize = const Size(1080, 2340);
     tester.view.devicePixelRatio = 2.6;
     addTearDown(tester.view.reset);
@@ -91,16 +112,19 @@ void main() {
     await tester.pumpWidget(_wrap(store, HomeScreen(onOpenFocus: () {}), openBook: () => opened = true));
     await tester.pump();
 
-    expect(find.text('Plan today in your To-Do book'), findsOneWidget);
+    expect(find.byIcon(Icons.lock_rounded), findsNothing);
     await tester.tap(find.text('Maths'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.lock_rounded).first);
-    await tester.pumpAndSettle();
-    expect(store.activeTimer, isNull);
-    expect(find.textContaining('Pick a task from today'), findsOneWidget);
-    await tester.tap(find.text('Open book'));
-    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.play_arrow_rounded).first);
+    await tester.pump();
+    expect(store.activeTimer?.subjectId, store.subjects.single.id);
+    expect(store.activeTimer!.isLinked, isFalse);
+    store.stopTimer();
+    await tester.pump();
+
+    await tester.tap(find.text('To-Do book'));
+    await tester.pump();
     expect(opened, isTrue);
-    await tester.pump(const Duration(seconds: 10));
+    await tester.pump(const Duration(seconds: 1)); // let the save timer finish
   });
 }

@@ -21,6 +21,7 @@ class FocusScreen extends StatefulWidget {
 class _FocusScreenState extends State<FocusScreen> {
   String? _subjectId;
   String? _chapterId;
+  String? _pickedSeen;
   bool _pomodoroMode = true;
   final int _quote = math.Random().nextInt(motivationalQuotes.length);
 
@@ -31,12 +32,19 @@ class _FocusScreenState extends State<FocusScreen> {
     final p = store.pomodoro;
     final t = store.activeTimer;
     final runningSubject = store.subjectById(p?.subjectId ?? t?.subjectId);
+    // Any subject can be timed; the picked To-Do task is only the default.
     final picked = store.subjectById(store.selectedTask?.subjectId);
-    final Subject? sub = runningSubject ?? picked;
-    if (_subjectId != picked?.id) {
-      _subjectId = picked?.id;
-      _chapterId = null;
+    if (_pickedSeen != picked?.id) {
+      _pickedSeen = picked?.id;
+      if (picked != null) {
+        _subjectId = picked.id;
+        _chapterId = null;
+      }
     }
+    final Subject? sub = runningSubject ??
+        store.subjectById(_subjectId) ??
+        picked ??
+        (store.subjects.isEmpty ? null : store.subjects.first);
     final color = sub?.colorValue ?? scheme.primary;
 
     return Scaffold(
@@ -53,13 +61,13 @@ class _FocusScreenState extends State<FocusScreen> {
           child: sub == null
               ? Center(
                   child: EmptyState(
-                    emoji: '📖',
-                    title: 'Pick a task first',
-                    body: "Focus sessions unlock for the subject you pick on today's page of your To-Do book.",
+                    emoji: '📚',
+                    title: 'No subjects yet',
+                    body: 'Create a subject on the Today tab to start focusing.',
                     action: FilledButton.icon(
-                      onPressed: BookNavigator.of(context)?.openBook,
-                      icon: const Icon(Icons.menu_book),
-                      label: const Text('Open my To-Do book'),
+                      onPressed: BookNavigator.of(context)?.openToday,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Go to Today'),
                     ),
                   ),
                 )
@@ -149,22 +157,30 @@ class _SetupView extends StatelessWidget {
               onPressed: () => showPomodoroSettings(context),
             ),
           ),
-        const SectionTitle("Today's pick"),
-        Card(
-          child: ListTile(
-            leading: SubjectAvatar(subject, size: 40),
-            title: Text(subject.name, style: const TextStyle(fontWeight: FontWeight.w800)),
-            subtitle: Builder(builder: (_) {
-              final task = store.selectedTask!;
-              return Text('${formatDuration(store.taskRemainingMs(store.todayKey, task))} left of '
-                  '${formatDuration(task.targetMs)} today');
-            }),
-            trailing: TextButton(
-              onPressed: BookNavigator.of(context)?.openBook,
-              child: const Text('Change'),
+        const SectionTitle('Subject'),
+        Wrap(spacing: 8, runSpacing: 4, children: [
+          for (final s in store.subjects)
+            ChoiceChip(
+              avatar: Text(s.emoji),
+              label: Text(s.name),
+              selected: s.id == subject.id,
+              selectedColor: s.colorValue.withValues(alpha: 0.25),
+              onSelected: (_) => onSubject(s.id),
             ),
-          ),
-        ),
+        ]),
+        Builder(builder: (_) {
+          final task = store.selectedTask;
+          final day = store.selectedTaskDay;
+          if (task == null || day == null || task.subjectId != subject.id) return const SizedBox.shrink();
+          return Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              '📌 Counts toward ${prettyDayKey(day, store.todayKey)}: '
+              '${formatDuration(store.taskRemainingMs(day, task))} left of ${formatDuration(task.targetMs)}',
+              style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+            ),
+          );
+        }),
         if (chapters.isNotEmpty) ...[
           const SectionTitle('Chapter'),
           Wrap(spacing: 8, runSpacing: 4, children: [
@@ -182,11 +198,8 @@ class _SetupView extends StatelessWidget {
           ),
           icon: const Icon(Icons.play_arrow_rounded, size: 28),
           label: Text(pomodoroMode ? 'Start Pomodoro' : 'Start focus'),
-          onPressed: () => showGateSnack(
-            context,
-            store,
-            pomodoroMode ? store.startPomodoro(subject.id, chapterId) : store.startTimer(subject.id, chapterId),
-          ),
+          onPressed: () =>
+              pomodoroMode ? store.startPomodoro(subject.id, chapterId) : store.startTimer(subject.id, chapterId),
         ),
         const SizedBox(height: 12),
         Center(
@@ -227,9 +240,10 @@ class _RunningView extends StatelessWidget {
       if (p.isBreak) ringColor = Colors.teal;
     } else {
       final live = store.liveMs;
-      final task = store.selectedTask;
-      progress = task != null && task.subjectId == subject.id
-          ? store.taskProgressMs(store.todayKey, task) / task.targetMs
+      final task = store.linkedTask;
+      final day = store.activeTimer?.planDay;
+      progress = task != null && day != null
+          ? store.taskProgressMs(day, task) / task.targetMs
           : (live % 3600000) / 3600000;
       clock = formatClock(live);
       phaseLabel = 'Focusing';
@@ -280,7 +294,7 @@ class _RunningView extends StatelessWidget {
         const SizedBox(height: 16),
         Text(
           left != null
-              ? '⏰ Alarm in ${formatClock(left)} — target ${formatDuration(store.selectedTask?.targetMs ?? 0)}'
+              ? '⏰ Alarm in ${formatClock(left)} — target ${formatDuration(store.linkedTask?.targetMs ?? 0)}'
               : 'Today ${formatDuration(store.todayMs)}',
           style: TextStyle(color: scheme.onSurfaceVariant, fontWeight: FontWeight.w600),
         ),

@@ -161,6 +161,10 @@ class StudySession {
   bool manual;
   bool pomodoro;
 
+  /// The To-Do book page this time counts toward, when it was studied for a
+  /// task on another day (e.g. a future page). Null = the day it was studied.
+  String? planDay;
+
   StudySession({
     required this.id,
     required this.subjectId,
@@ -169,6 +173,7 @@ class StudySession {
     required this.endMs,
     this.manual = false,
     this.pomodoro = false,
+    this.planDay,
   });
 
   int get durationMs => endMs - startMs;
@@ -183,6 +188,7 @@ class StudySession {
         'b': endMs,
         if (manual) 'm': true,
         if (pomodoro) 'p': true,
+        if (planDay != null) 'd': planDay,
       };
 
   factory StudySession.fromJson(Map<String, dynamic> j) => StudySession(
@@ -193,6 +199,7 @@ class StudySession {
         endMs: (j['b'] as num).toInt(),
         manual: j['m'] as bool? ?? false,
         pomodoro: j['p'] as bool? ?? false,
+        planDay: j['d'] as String?,
       );
 }
 
@@ -215,13 +222,35 @@ class ActiveTimer {
   final String subjectId;
   final String? chapterId;
   final int startMs;
-  const ActiveTimer({required this.subjectId, this.chapterId, required this.startMs});
 
-  Map<String, dynamic> toJson() => {'s': subjectId, 'c': chapterId, 'a': startMs};
+  /// The To-Do task this timer is linked to (it stops and rings at the
+  /// task's target). Null for a free timer.
+  final String? taskId;
+  final String? planDay;
+
+  const ActiveTimer({
+    required this.subjectId,
+    this.chapterId,
+    required this.startMs,
+    this.taskId,
+    this.planDay,
+  });
+
+  bool get isLinked => taskId != null && planDay != null;
+
+  Map<String, dynamic> toJson() => {
+        's': subjectId,
+        'c': chapterId,
+        'a': startMs,
+        if (taskId != null) 't': taskId,
+        if (planDay != null) 'd': planDay,
+      };
   factory ActiveTimer.fromJson(Map<String, dynamic> j) => ActiveTimer(
         subjectId: j['s'] as String,
         chapterId: j['c'] as String?,
         startMs: (j['a'] as num).toInt(),
+        taskId: j['t'] as String?,
+        planDay: j['d'] as String?,
       );
 }
 
@@ -473,6 +502,9 @@ class AppData {
   String? selectedTaskDay;
   AlarmState? alarm;
 
+  /// The To-Do book page that was open last.
+  String? bookPage;
+
   AppData({
     List<Subject>? subjects,
     List<StudySession>? sessions,
@@ -488,6 +520,7 @@ class AppData {
     this.selectedTaskId,
     this.selectedTaskDay,
     this.alarm,
+    this.bookPage,
   })  : plans = plans ?? {},
         subjects = subjects ?? [],
         sessions = sessions ?? [],
@@ -522,6 +555,7 @@ class AppData {
         'selectedTaskId': selectedTaskId,
         'selectedTaskDay': selectedTaskDay,
         'alarm': alarm?.toJson(),
+        'bookPage': bookPage,
       };
 
   factory AppData.fromJson(Map<String, dynamic> j) {
@@ -543,6 +577,7 @@ class AppData {
       selectedTaskId: j['selectedTaskId'] as String?,
       selectedTaskDay: j['selectedTaskDay'] as String?,
       alarm: j['alarm'] == null ? null : AlarmState.fromJson(m(j['alarm'])!),
+      bookPage: j['bookPage'] as String?,
     );
   }
 }

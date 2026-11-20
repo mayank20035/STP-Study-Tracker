@@ -1,5 +1,14 @@
 # 📖 To-Do Book — Implementation Plan (STP v2.1)
 
+> **Changes after v2.1 (these replace the matching rules below):**
+> - The book reopens on the page that was open last (`AppData.bookPage`).
+> - Pages turn vertically like a notepad: pull past the bottom edge to flip up to the next day, past the top edge to bring the previous day down.
+> - Carry-over is removed.
+> - Timers are no longer locked. Any subject can be timed at any time (a *free* timer). Free time counts on the page of the day it was studied, so adding the subject to that page later shows it.
+> - Picking a task is optional and works on today's **and future** pages. A timer for the picked subject is *linked* (`ActiveTimer.taskId/planDay`): it stops and rings at the target. Time studied for a future page is saved with `StudySession.planDay` and counts on that page, not on the day it was studied.
+> - Past pages can be edited too (add / change / remove tasks), but past tasks can't be picked.
+> - Unpicking or removing a picked task keeps its running timer going as a free timer.
+
 ## 1. What you asked for
 
 1. A **To-Do Book** becomes the **first tab**. It looks and feels like a real diary: one **page per day**, today's page opens first.

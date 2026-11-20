@@ -239,6 +239,33 @@ class EmptyState extends StatelessWidget {
   }
 }
 
+/// Popup shown when Save is pressed with a field left empty (or invalid).
+/// Shown as a dialog, so it is visible above bottom sheets too.
+Future<void> showFillFieldsDialog(BuildContext context, String message) {
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      icon: const Icon(Icons.edit_note_rounded, size: 32),
+      title: const Text('Fill in the details'),
+      content: Text(message, textAlign: TextAlign.center),
+      actions: [
+        FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+      ],
+    ),
+  );
+}
+
+/// "Please fill in Subject name and Target hours."
+String missingFieldsMessage(List<String> fields) {
+  final list = fields.length == 1
+      ? fields.single
+      : '${fields.sublist(0, fields.length - 1).join(', ')} and ${fields.last}';
+  return 'Please fill in $list.';
+}
+
+/// Single-field text prompt. When [required] is true (the default), pressing
+/// Save with an empty field shows a popup and keeps the prompt open.
+/// [validate] can return an error message for a filled but invalid value.
 Future<String?> promptText(
   BuildContext context, {
   required String title,
@@ -246,26 +273,50 @@ Future<String?> promptText(
   String hint = '',
   String confirm = 'Save',
   TextInputType keyboard = TextInputType.text,
+  bool required = true,
+  String? Function(String value)? validate,
 }) {
   final ctrl = TextEditingController(text: initial);
   return showDialog<String>(
     context: context,
-    builder: (ctx) => AlertDialog(
-      title: Text(title),
-      content: TextField(
-        controller: ctrl,
-        autofocus: true,
-        keyboardType: keyboard,
-        textCapitalization: TextCapitalization.sentences,
-        decoration: InputDecoration(hintText: hint),
-        onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-        FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: Text(confirm)),
-      ],
-    ),
+    builder: (ctx) {
+      void submit() {
+        final v = ctrl.text.trim();
+        if (required && v.isEmpty) {
+          showFillFieldsDialog(ctx, missingFieldsMessage([title]));
+          return;
+        }
+        final error = v.isEmpty ? null : validate?.call(v);
+        if (error != null) {
+          showFillFieldsDialog(ctx, error);
+          return;
+        }
+        Navigator.pop(ctx, v);
+      }
+
+      return AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: keyboard,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: InputDecoration(hintText: hint),
+          onSubmitted: (_) => submit(),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(onPressed: submit, child: Text(confirm)),
+        ],
+      );
+    },
   );
+}
+
+/// Validator for prompts that need a whole number above zero.
+String? positiveWholeNumber(String v) {
+  final n = int.tryParse(v);
+  return n == null || n <= 0 ? 'Please enter a whole number above 0.' : null;
 }
 
 Future<bool> confirmDialog(

@@ -271,7 +271,8 @@ class _HeroCard extends StatelessWidget {
     final v = await promptText(context,
         title: 'Daily goal (minutes)',
         initial: store.settings.dailyGoalMinutes.toString(),
-        keyboard: TextInputType.number);
+        keyboard: TextInputType.number,
+        validate: positiveWholeNumber);
     final n = int.tryParse(v ?? '');
     if (n != null && n > 0) store.updateSettings((s) => s.dailyGoalMinutes = n);
   }
@@ -351,7 +352,10 @@ class _SubjectCardState extends State<SubjectCard> {
 
   void _addChapter() {
     final t = _chapterCtrl.text.trim();
-    if (t.isEmpty) return;
+    if (t.isEmpty) {
+      showFillFieldsDialog(context, missingFieldsMessage(['the chapter name']));
+      return;
+    }
     context.read<StudyStore>().addChapter(widget.subject.id, t);
     _chapterCtrl.clear();
   }
@@ -450,9 +454,8 @@ class _SubjectCardState extends State<SubjectCard> {
                       title: const Text('General study (no chapter)'),
                       trailing: _PlayButton(
                         running: subjectRunning,
-                        locked: !subjectRunning && store.canStart(s.id) != StartGate.ok,
                         color: s.colorValue,
-                        onTap: () => showGateSnack(context, store, store.toggleTimer(s.id)),
+                        onTap: () => store.toggleTimer(s.id),
                       ),
                     ),
                     for (var i = 0; i < s.chapters.length; i++)
@@ -482,8 +485,7 @@ class _PlayButton extends StatelessWidget {
   final bool running;
   final Color color;
   final VoidCallback onTap;
-  final bool locked;
-  const _PlayButton({required this.running, required this.color, required this.onTap, this.locked = false});
+  const _PlayButton({required this.running, required this.color, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -493,26 +495,14 @@ class _PlayButton extends StatelessWidget {
       height: 38,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: running
-            ? Theme.of(context).colorScheme.error
-            : locked
-                ? Theme.of(context).colorScheme.outlineVariant
-                : color,
+        color: running ? Theme.of(context).colorScheme.error : color,
         boxShadow: running
             ? [BoxShadow(color: Theme.of(context).colorScheme.error.withValues(alpha: 0.4), blurRadius: 10)]
             : null,
       ),
       child: IconButton(
         padding: EdgeInsets.zero,
-        tooltip: locked ? 'Locked — pick this subject in your To-Do book' : null,
-        icon: Icon(
-            running
-                ? Icons.pause_rounded
-                : locked
-                    ? Icons.lock_rounded
-                    : Icons.play_arrow_rounded,
-            color: Colors.white,
-            size: locked ? 18 : 24),
+        icon: Icon(running ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.white, size: 24),
         onPressed: onTap,
       ),
     );
@@ -608,9 +598,8 @@ class _ChapterRow extends StatelessWidget {
           ),
           _PlayButton(
             running: running,
-            locked: !running && store.canStart(subject.id) != StartGate.ok,
             color: subject.colorValue,
-            onTap: () => showGateSnack(context, store, store.toggleTimer(subject.id, chapter.id)),
+            onTap: () => store.toggleTimer(subject.id, chapter.id),
           ),
         ]),
       ),
@@ -629,7 +618,10 @@ void showLevelsSheet(BuildContext context) {
         final label = await promptText(ctx, title: g == null ? 'New level' : 'Level name', initial: g?.label ?? '');
         if (label == null || label.isEmpty || !ctx.mounted) return;
         final hrs = await promptText(ctx,
-            title: 'Target hours', initial: g?.hours.toString() ?? '', keyboard: TextInputType.number);
+            title: 'Target hours',
+            initial: g?.hours.toString() ?? '',
+            keyboard: TextInputType.number,
+            validate: positiveWholeNumber);
         final h = int.tryParse(hrs ?? '');
         if (h == null || h <= 0) return;
         if (g == null) {
@@ -744,26 +736,23 @@ class _TaskStrip extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final nav = BookNavigator.of(context);
     final task = store.selectedTask;
+    final day = store.selectedTaskDay;
     final sub = store.subjectById(task?.subjectId);
-    if (task == null || sub == null) {
-      final planned = store.planFor(store.todayKey).tasks.length;
+    if (task == null || day == null || sub == null) {
       return Card(
         color: scheme.tertiaryContainer,
         child: ListTile(
-          leading: const Text('📖', style: TextStyle(fontSize: 28)),
-          title: Text(planned == 0 ? 'Plan today in your To-Do book' : 'Pick a task in your To-Do book',
-              style: const TextStyle(fontWeight: FontWeight.w800)),
-          subtitle: Text(planned == 0
-              ? "Timers unlock once you add a subject to today's page and pick it."
-              : '$planned planned today — pick one to unlock its timer.'),
+          leading: const Text('📖', style: TextStyle(fontSize: 26)),
+          title: const Text('To-Do book', style: TextStyle(fontWeight: FontWeight.w800)),
+          subtitle: const Text('Pick a task to get an alarm at its target'),
           trailing: const Icon(Icons.chevron_right),
           onTap: nav?.openBook,
         ),
       );
     }
-    final today = store.todayKey;
-    final progress = store.taskProgressMs(today, task);
-    final done = store.isTaskDone(today, task);
+    final progress = store.taskProgressMs(day, task);
+    final done = store.isTaskDone(day, task);
+    final pickLabel = day == store.todayKey ? "TODAY'S PICK" : 'PICK · ${prettyDayKey(day, store.todayKey).toUpperCase()}';
     return Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
@@ -774,11 +763,11 @@ class _TaskStrip extends StatelessWidget {
             Row(children: [
               const Text('📌', style: TextStyle(fontSize: 16)),
               const SizedBox(width: 6),
-              Text("TODAY'S PICK",
+              Text(pickLabel,
                   style: TextStyle(
                       fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.4, color: scheme.onSurfaceVariant)),
               const Spacer(),
-              Text(done ? '✔ Done' : '${formatDuration(store.taskRemainingMs(today, task))} left',
+              Text(done ? '✔ Done' : '${formatDuration(store.taskRemainingMs(day, task))} left',
                   style: TextStyle(fontWeight: FontWeight.w800, color: done ? Colors.green : sub.colorValue)),
             ]),
             const SizedBox(height: 8),

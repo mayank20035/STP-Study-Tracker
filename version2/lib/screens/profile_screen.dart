@@ -207,7 +207,8 @@ class ProfileScreen extends StatelessWidget {
                   final v = await promptText(context,
                       title: 'Daily goal (minutes)',
                       initial: '${store.settings.dailyGoalMinutes}',
-                      keyboard: TextInputType.number);
+                      keyboard: TextInputType.number,
+                      validate: positiveWholeNumber);
                   final n = int.tryParse(v ?? '');
                   if (n != null && n > 0) store.updateSettings((s) => s.dailyGoalMinutes = n);
                 },
@@ -301,7 +302,7 @@ class ProfileScreen extends StatelessWidget {
           ),
           const SizedBox(height: 24),
           Center(
-            child: Text('STP v2.1.0 · Made with Flutter 💙',
+            child: Text('STP v2.2.0 · Made with Flutter 💙',
                 style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
           ),
         ],

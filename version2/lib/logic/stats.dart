@@ -6,6 +6,10 @@ import 'day_utils.dart';
 class StatsSnapshot {
   final Map<String, int> daily = {};
   final Map<String, Map<String, int>> subjectDaily = {};
+
+  /// Time per subject per To-Do book page: a session counts toward its
+  /// [StudySession.planDay] when set, otherwise toward the day it was studied.
+  final Map<String, Map<String, int>> planDaily = {};
   final Map<String, int> subjectTotal = {};
   final Map<String, int> chapterTotal = {};
   final Map<String, int> subjectSessionMs = {};
@@ -47,6 +51,12 @@ class StatsSnapshot {
         daily[k] = (daily[k] ?? 0) + v;
         sd[k] = (sd[k] ?? 0) + v;
       });
+      final pd = planDaily.putIfAbsent(ses.subjectId, () => {});
+      if (ses.planDay != null) {
+        pd[ses.planDay!] = (pd[ses.planDay!] ?? 0) + d;
+      } else {
+        perDay.forEach((k, v) => pd[k] = (pd[k] ?? 0) + v);
+      }
       if (!ses.manual) {
         final hb = List.filled(24, 0);
         addToHourBuckets(hb, ses.startMs, ses.endMs);
