@@ -1,7 +1,7 @@
 > ## 🆕 STP v2 is here — rebuilt in Flutter with a To-Do Book
 > You're on the `version-2` branch. The new app lives in [`version2/`](version2/) — see its [README](version2/README.md).
 >
-> 📥 **Download the APK (v2.2.0):** [arm64 — 20.9 MB (recommended)](https://github.com/mayank20035/STP-Study-Tracker/releases/download/v2.2.0/STP-v2.2.0-arm64.apk) · [universal — 57.2 MB](https://github.com/mayank20035/STP-Study-Tracker/releases/download/v2.2.0/STP-v2.2.0-universal.apk) · [release notes](https://github.com/mayank20035/STP-Study-Tracker/releases/tag/v2.2.0)
+> 📥 **Download the APK (v2.3.0):** [arm64 — 20.9 MB (recommended)](https://github.com/mayank20035/STP-Study-Tracker/releases/download/v2.3.0/STP-v2.3.0-arm64.apk) · [universal — 57.3 MB](https://github.com/mayank20035/STP-Study-Tracker/releases/download/v2.3.0/STP-v2.3.0-universal.apk) · [release notes](https://github.com/mayank20035/STP-Study-Tracker/releases/tag/v2.3.0)
 >
 > The README below is for the original v1 React Native app.
 

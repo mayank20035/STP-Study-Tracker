@@ -261,9 +261,28 @@ void main() {
       expect(store.isTaskDone(tomorrow, store.planFor(tomorrow).taskById(future)!), isTrue);
     });
 
-    test('past, finished and unknown tasks cannot be picked', () {
-      final past = addTask(physics, hour, yesterday);
-      expect(pick(past, yesterday), isFalse);
+    test('a missed task can be picked and finished later', () {
+      final missed = addTask(physics, 30 * min, yesterday);
+      final todayTask = addTask(physics, hour);
+      expect(store.pageStatus(yesterday), PageStatus.missed);
+      expect(pick(missed, yesterday), isTrue);
+      expect(store.selectedTaskDay, yesterday);
+      store.startTimer(physics.id);
+      expect(store.timerRemainingMs, 30 * min);
+      h.clock.advance(const Duration(minutes: 31));
+      store.tick();
+      expect(store.activeTimer, isNull, reason: 'stops at the target');
+      expect(store.alarm?.dayKey, yesterday);
+      expect(store.sessions.single.planDay, yesterday);
+      expect(store.isTaskDone(yesterday, store.planFor(yesterday).taskById(missed)!), isTrue);
+      expect(store.pageStatus(yesterday), PageStatus.conquered);
+      expect(store.taskProgressMs(today, store.planFor(today).taskById(todayTask)!), 0,
+          reason: 'catch-up time counts on the missed page, not today');
+      expect(store.subjectTodayMs(physics.id), 30 * min, reason: 'it was still studied today');
+      expect(store.extendAfterAlarm(15), isTrue, reason: '+15 min works for a missed page too');
+    });
+
+    test('finished and unknown tasks cannot be picked', () {
       expect(pick('missing'), isFalse);
       final id = addTask(maths, 30 * min);
       store.addSession(StudySession(
@@ -598,7 +617,7 @@ void main() {
 
   // ---------------------------------------------------------------- day change
   group('new day', () {
-    test('a timer linked to today\'s task stops when the page is over', () async {
+    test('a linked timer keeps counting toward its page past 5 AM', () async {
       final late = await makeHarness(at: DateTime(2026, 3, 10, 22));
       final s = late.store;
       final p = s.addSubject(name: 'P', targetHours: 10);
@@ -607,10 +626,11 @@ void main() {
       s.startTimer(p.id);
       late.clock.set(DateTime(2026, 3, 11, 5, 30));
       s.tick();
-      expect(s.activeTimer, isNull);
-      expect(s.sessions.single.endMs, DateTime(2026, 3, 11, 5).millisecondsSinceEpoch);
-      expect(s.taskProgressMs(today, s.planFor(today).tasks.single), 7 * hour);
-      expect(s.selectedTask, isNull);
+      expect(s.activeTimer, isNotNull);
+      expect(s.timerRemainingMs, 2 * hour + 30 * min);
+      s.stopTimer();
+      expect(s.taskProgressMs(today, s.planFor(today).tasks.single), 7 * hour + 30 * min);
+      expect(s.selectedTask?.id, s.planFor(today).tasks.single.id, reason: 'the pick stays');
       expect(s.alarm, isNull);
     });
 
@@ -619,11 +639,14 @@ void main() {
       expect(late.store.todayKey, today);
     });
 
-    test('a selection from yesterday is dropped on reopen', () async {
+    test('a pick from yesterday stays, so the missed task can still be finished', () async {
       final id = addTask(physics, hour);
       pick(id);
       final h2 = await h.reopen(after: const Duration(days: 1));
-      expect(h2.store.selectedTask, isNull);
+      expect(h2.store.selectedTask?.id, id);
+      expect(h2.store.selectedTaskDay, today);
+      h2.store.startTimer(physics.id);
+      expect(h2.store.timerRemainingMs, hour);
     });
 
     test('a pick on a future page is kept when that day arrives', () async {

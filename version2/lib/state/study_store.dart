@@ -98,7 +98,6 @@ class StudyStore extends ChangeNotifier {
     _lastTickDay = todayKey;
     _advancePomodoro();
     _enforceLimits(fromResume: true);
-    _clearStaleSelection();
     _syncAlarmSchedule(force: true);
     _verifyPersistedAlarm();
     if (enableTicker) _startTicker();
@@ -135,7 +134,6 @@ class StudyStore extends ChangeNotifier {
     if (dayChanged) {
       _invalidate();
       _enforceLimits();
-      _clearStaleSelection();
       _changed();
     }
     if (_data.pomodoro != null) _advancePomodoro();
@@ -349,8 +347,9 @@ class StudyStore extends ChangeNotifier {
       startMs: start,
       endMs: end,
       pomodoro: pomodoro,
-      // Time studied for another page's task counts on that page.
-      planDay: t.isLinked && t.planDay != dayKeyForMs(start, settings.dayStartHour) ? t.planDay : null,
+      // Time studied for a picked task counts on that task's page, whichever
+      // day it was studied on (catching up a missed day, or working ahead).
+      planDay: t.isLinked ? t.planDay : null,
     ));
     _invalidate();
   }
@@ -564,12 +563,8 @@ class StudyStore extends ChangeNotifier {
 
   bool isPastDay(String dayKey) => dayKey.compareTo(todayKey) < 0;
 
-  /// The page of the picked task (today or a future page), if any.
-  String? get selectedTaskDay {
-    final day = _data.selectedTaskDay;
-    if (day == null || isPastDay(day)) return null;
-    return day;
-  }
+  /// The page of the picked task (any day: missed, today or ahead), if any.
+  String? get selectedTaskDay => _data.selectedTaskDay;
 
   /// The task picked in the To-Do book, if any.
   PlanTask? get selectedTask {
@@ -580,14 +575,13 @@ class StudyStore extends ChangeNotifier {
 
   bool isSelected(String dayKey, PlanTask t) => selectedTaskDay == dayKey && selectedTask?.id == t.id;
 
-  /// Time counted toward a task: the subject's time studied that day, plus
-  /// time studied on other days for this page (e.g. working ahead).
+  /// Time counted toward a task: the subject's free time studied that day,
+  /// plus all time studied while this task was picked.
   int taskProgressMs(String dayKey, PlanTask t) {
     var ms = snapshot.planDaily[t.subjectId]?[dayKey] ?? 0;
     final a = activeTimer;
     if (a != null && a.subjectId == t.subjectId) {
-      final startDay = dayKeyForMs(a.startMs, settings.dayStartHour);
-      if (a.isLinked && a.planDay != startDay) {
+      if (a.isLinked) {
         if (a.planDay == dayKey) ms += liveMs;
       } else {
         ms += _liveSplit[dayKey] ?? 0;
@@ -691,16 +685,49 @@ class StudyStore extends ChangeNotifier {
     _changed();
   }
 
+  /// Number of tasks planned in the week that starts on [weekStart].
+  int weekTaskCount(String weekStart) {
+    var n = 0;
+    for (var i = 0; i < 7; i++) {
+      n += planFor(addDays(weekStart, i)).tasks.length;
+    }
+    return n;
+  }
+
+  /// Copies the tasks of the week starting [fromWeek] onto the same weekdays
+  /// of the week starting [toWeek] (subject and study time only, no progress,
+  /// notes or moods). Tasks already in the target week are kept; a subject
+  /// that is already on a target page is skipped.
+  ({int added, int skipped}) copyWeek(String fromWeek, String toWeek) {
+    if (fromWeek == toWeek) return (added: 0, skipped: 0);
+    var added = 0, skipped = 0;
+    for (var i = 0; i < 7; i++) {
+      final src = _data.plans[addDays(fromWeek, i)];
+      if (src == null) continue;
+      final dst = addDays(toWeek, i);
+      for (final t in src.tasks) {
+        if (subjectById(t.subjectId) == null) continue;
+        if (planFor(dst).taskForSubject(t.subjectId) != null) {
+          skipped++;
+          continue;
+        }
+        _ensurePlan(dst).tasks.add(PlanTask(id: newId(), subjectId: t.subjectId, targetMs: t.targetMs));
+        added++;
+      }
+    }
+    if (added > 0) _changed();
+    return (added: added, skipped: skipped);
+  }
+
   void setDayMood(String dayKey, int? mood) {
     _ensurePlan(dayKey).mood = mood;
     _changed();
   }
 
-  /// Picks a task on today's or a future page. A timer for its subject then
-  /// counts toward that page and stops (with an alarm) at the target.
-  /// Returns false for past pages, finished tasks and unknown tasks.
+  /// Picks a task on any page: a missed day, today or a future day. A timer
+  /// for its subject then counts toward that page and stops (with an alarm)
+  /// at the target. Returns false for finished and unknown tasks.
   bool selectTask(String dayKey, String taskId) {
-    if (isPastDay(dayKey)) return false;
     final task = _data.plans[dayKey]?.taskById(taskId);
     if (task == null || isTaskDone(dayKey, task)) return false;
     _data.selectedTaskId = task.id;
@@ -727,14 +754,6 @@ class StudyStore extends ChangeNotifier {
     _changed(sessionsChanged: true);
   }
 
-  void _clearStaleSelection() {
-    final day = _data.selectedTaskDay;
-    if (day != null && isPastDay(day)) {
-      _data.selectedTaskId = null;
-      _data.selectedTaskDay = null;
-    }
-  }
-
   /// The book page that was open last, so the book reopens there.
   String? get bookPage => _data.bookPage;
 
@@ -755,7 +774,7 @@ class StudyStore extends ChangeNotifier {
 
   // ---------------------------------------------------------------- limits & alarm
   /// When the running timer must stop. A free timer never stops by itself;
-  /// a linked timer stops at its task's target, or when its page is over.
+  /// a linked timer stops at its task's target.
   ({int atMs, bool isTarget, PlanTask? task, String dayKey}) _limitFor(ActiveTimer t) {
     const never = 8640000000000000;
     final day = t.planDay;
@@ -763,12 +782,9 @@ class StudyStore extends ChangeNotifier {
     if (day == null || task == null || task.subjectId != t.subjectId) {
       return (atMs: never, isTarget: false, task: null, dayKey: day ?? todayKey);
     }
-    final h = settings.dayStartHour;
-    final pageOver = dayStartMoment(addDays(day, 1), h).millisecondsSinceEpoch;
     final before = snapshot.planDaily[t.subjectId]?[day] ?? 0;
     final int reach = t.startMs + math.max<int>(0, task.targetMs - before);
-    if (reach <= pageOver) return (atMs: reach, isTarget: true, task: task, dayKey: day);
-    return (atMs: pageOver, isTarget: false, task: null, dayKey: day);
+    return (atMs: reach, isTarget: true, task: task, dayKey: day);
   }
 
   /// Time left before the running timer stops at its target (null = none).
@@ -814,11 +830,6 @@ class StudyStore extends ChangeNotifier {
       }
       pomodoroEvents.value =
           PomodoroEvent(++_eventSerial, '🎯 Target reached for ${sub?.name ?? 'your task'}!');
-    } else {
-      _data.selectedTaskId = null;
-      _data.selectedTaskDay = null;
-      pomodoroEvents.value = PomodoroEvent(
-          ++_eventSerial, '📖 The picked page is over, so its timer stopped.');
     }
     _safeHaptic(HapticFeedback.heavyImpact);
     _changed(sessionsChanged: true);
@@ -877,7 +888,7 @@ class StudyStore extends ChangeNotifier {
   bool extendAfterAlarm(int minutes) {
     final a = _data.alarm;
     stopAlarm();
-    if (a == null || isPastDay(a.dayKey)) return false;
+    if (a == null) return false;
     final task = _data.plans[a.dayKey]?.taskById(a.taskId);
     if (task == null) return false;
     task.targetMs = math.min(maxTargetMs, task.targetMs + minutes * 60000);

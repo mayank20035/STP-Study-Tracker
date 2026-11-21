@@ -25,6 +25,9 @@ String addDays(String key, int days) {
   return keyOfDate(DateTime(d.year, d.month, d.day + days));
 }
 
+/// The Monday that starts the week containing day [key].
+String weekStartOf(String key) => addDays(key, 1 - dateOfKey(key).weekday);
+
 /// The real moment the study day [key] begins.
 DateTime dayStartMoment(String key, int dayStartHour) {
   final d = dateOfKey(key);

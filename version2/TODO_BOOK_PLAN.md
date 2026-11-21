@@ -2,11 +2,13 @@
 
 > **Changes after v2.1 (these replace the matching rules below):**
 > - The book reopens on the page that was open last (`AppData.bookPage`).
-> - Pages turn vertically like a notepad: pull past the bottom edge to flip up to the next day, past the top edge to bring the previous day down.
+> - Pages turn with a soft **page curl** (like StPageFlip): the corner is folded along a line (`CurlGeometry` in `widgets/page_curl.dart`), the back of the paper is drawn as a glossy flap and the page below gets a shadow. Swipe left = next day, right = previous day.
+> - **Week view** (book icon): the 7 pages of a Monday–Sunday week as mini pages on one screen, with previous/next week. Tapping a page opens it in the book.
+> - **Copy week** (`copyWeek`): copies tasks to the same weekdays of a later week; target-week tasks are kept and duplicate subjects skipped.
 > - Carry-over is removed.
 > - Timers are no longer locked. Any subject can be timed at any time (a *free* timer). Free time counts on the page of the day it was studied, so adding the subject to that page later shows it.
-> - Picking a task is optional and works on today's **and future** pages. A timer for the picked subject is *linked* (`ActiveTimer.taskId/planDay`): it stops and rings at the target. Time studied for a future page is saved with `StudySession.planDay` and counts on that page, not on the day it was studied.
-> - Past pages can be edited too (add / change / remove tasks), but past tasks can't be picked.
+> - Picking a task is optional and works on **any** page: a missed day, today or a future day. A timer for the picked subject is *linked* (`ActiveTimer.taskId/planDay`): it stops and rings at the target. Time studied for a future page is saved with `StudySession.planDay` and counts on that page, not on the day it was studied.
+> - Past pages can be edited too (add / change / remove tasks), and **missed tasks can be picked** to finish them later. Time studied while a task is picked always counts on that task's page (`StudySession.planDay`), and a picked timer runs until its target (it no longer stops at the 5 AM reset). A pick stays until the task is done or unpicked.
 > - Unpicking or removing a picked task keeps its running timer going as a free timer.
 
 ## 1. What you asked for

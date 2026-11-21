@@ -4,7 +4,7 @@
 
 Version 2 of **STP**, rebuilt from scratch in **Flutter / Material 3**.
 
-## 📖 New in v2.2 — a simpler, freer To-Do Book
+## 📖 New in v2.3 — page curl, week view and catch-up
 
 | Today's page | A past day | Target reached |
 |:---:|:---:|:---:|
@@ -14,11 +14,13 @@ The app opens on a simple **To-Do Book**, one page per day. It reopens on the pa
 
 1. **Plan:** tap *Add subject*, choose one of your subjects and set how long to study it (e.g. Physics 2h, Maths 1h 30m). Any page works: today, a future day, or a past day to log time you already studied.
 2. **Study:** timers are free. Start any subject from **Today** or **Focus** whenever you like; the time counts on that day's page automatically, even if you add the subject to the page later.
-3. **Pick (optional):** tap a task on today's page **or a future page** to work ahead. A timer for that subject then counts toward that page and shows the time left.
+3. **Pick (optional):** tap a task on any page: today, a **missed day** to catch up, or a **future day** to work ahead. A timer for that subject then counts toward that page and shows the time left.
 4. **Alarm:** when a picked task's target is reached, the timer **stops by itself** at the exact second and an **alarm rings until you press STOP**. This also works when the app is closed or the phone is locked, because the alarm is scheduled as a notification with a custom chime, vibration and a lock-screen alert. There's also *Stop & keep going +15 min*.
 
 The page:
-- turns like a notepad: pull up past the bottom of a page for the next day, pull down past the top for the previous day (or use the arrows / date picker)
+- turns with a real **page curl**: the corner peels up showing the back of the paper; swipe left for the next day, right to go back (or use the arrows / date picker)
+- **week view** (📖 icon in the corner): all 7 pages of a week on one screen, previous/next week, tap a page to open it
+- **copy a week** to next week, in 2 weeks or any later week (same weekdays and study times; existing tasks are kept)
 - a small Done / Partial / Missed label on past days
 - a note and mood for each day
 - the daily quote sits at the very bottom of the page
@@ -32,14 +34,14 @@ Details and the edge-case rules are in [TODO_BOOK_PLAN.md](TODO_BOOK_PLAN.md).
 *The icon: a stopwatch whose ring fills from white to gold as you study, wrapped around an open book with a golden "aha" spark.*
 The original React Native app (v1) lives in the repository root on the `main` branch and is untouched.
 
-## 📥 Download the APK (v2.2.0)
+## 📥 Download the APK (v2.3.0)
 
 | APK | Size | For |
 |---|---|---|
-| [**STP-v2.2.0-arm64.apk**](https://github.com/mayank20035/STP-Study-Tracker/releases/download/v2.2.0/STP-v2.2.0-arm64.apk) | 20.9 MB | Almost every modern Android phone (recommended) |
-| [**STP-v2.2.0-universal.apk**](https://github.com/mayank20035/STP-Study-Tracker/releases/download/v2.2.0/STP-v2.2.0-universal.apk) | 57.2 MB | Any Android device |
+| [**STP-v2.3.0-arm64.apk**](https://github.com/mayank20035/STP-Study-Tracker/releases/download/v2.3.0/STP-v2.3.0-arm64.apk) | 20.9 MB | Almost every modern Android phone (recommended) |
+| [**STP-v2.3.0-universal.apk**](https://github.com/mayank20035/STP-Study-Tracker/releases/download/v2.3.0/STP-v2.3.0-universal.apk) | 57.3 MB | Any Android device |
 
-Release notes: [v2.2.0 release page](https://github.com/mayank20035/STP-Study-Tracker/releases/tag/v2.2.0).
+Release notes: [v2.3.0 release page](https://github.com/mayank20035/STP-Study-Tracker/releases/tag/v2.3.0).
 
 The first time you start a timer, allow notifications so the target alarm can ring.
 

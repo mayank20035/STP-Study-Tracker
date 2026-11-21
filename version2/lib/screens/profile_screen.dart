@@ -302,7 +302,7 @@ class ProfileScreen extends StatelessWidget {
           ),
           const SizedBox(height: 24),
           Center(
-            child: Text('STP v2.2.0 · Made with Flutter 💙',
+            child: Text('STP v2.3.0 · Made with Flutter 💙',
                 style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
           ),
         ],

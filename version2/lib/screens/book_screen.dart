@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -10,13 +8,14 @@ import '../logic/stats.dart';
 import '../models/models.dart';
 import '../state/study_store.dart';
 import '../widgets/common.dart';
+import '../widgets/page_curl.dart';
 import '../widgets/subject_form.dart';
+import 'week_screen.dart';
 
 // ---------------------------------------------------------------- screen
 
-/// The To-Do book: one plain page per day. Pages turn like a notepad:
-/// pull up past the bottom of a page to flip it up to the next day, pull
-/// down past the top to bring the previous day back down.
+/// The To-Do book: one plain page per day. Pages turn with a paper page
+/// curl: swipe left to turn to the next day, right to go back.
 class BookScreen extends StatefulWidget {
   const BookScreen({super.key});
 
@@ -37,9 +36,9 @@ class _BookScreenState extends State<BookScreen> with SingleTickerProviderStateM
     final store = context.read<StudyStore>();
     // Reopen on the page that was open last time.
     _key = store.bookPage ?? store.todayKey;
-    _turn = AnimationController(vsync: this, duration: const Duration(milliseconds: 460))
+    _turn = AnimationController(vsync: this, duration: const Duration(milliseconds: 700))
       ..addListener(() {
-        setState(() => _progress = _from + (_to - _from) * Curves.easeInOutCubic.transform(_turn.value));
+        setState(() => _progress = _from + (_to - _from) * Curves.easeInOut.transform(_turn.value));
       })
       ..addStatusListener((s) {
         if (s == AnimationStatus.completed) _settle();
@@ -67,16 +66,26 @@ class _BookScreenState extends State<BookScreen> with SingleTickerProviderStateM
     _turn.forward(from: 0);
   }
 
-  /// Turn to any page with the page-flip animation.
+  /// Turn to any page with the page-curl animation.
   void goTo(String key) {
     if (key == _key || _turn.isAnimating) return;
     _neighbor = key;
+    _fromTop = true;
     HapticFeedback.selectionClick();
     _progress = key.compareTo(_key) > 0 ? 0.001 : -0.001;
     _animateTo(_progress.sign);
   }
 
   bool _dragging = false;
+
+  /// Which corner is being turned: the top one when the swipe starts in the
+  /// upper half of the page.
+  bool _fromTop = true;
+
+  void _dragStart(DragStartDetails d, double height) {
+    if (_turn.isAnimating) return;
+    _fromTop = d.localPosition.dy < height / 2;
+  }
 
   void _dragBy(double delta) {
     if (_turn.isAnimating) return;
@@ -95,24 +104,19 @@ class _BookScreenState extends State<BookScreen> with SingleTickerProviderStateM
     setState(() => _progress = next);
   }
 
-  void _release() {
+  void _release(DragEndDetails d) {
     if (!_dragging) return;
     _dragging = false;
     if (_turn.isAnimating || _progress == 0) return;
-    final commit = _progress.abs() > 0.25;
+    final v = -(d.primaryVelocity ?? 0);
+    final commit = _progress.abs() > 0.3 || (v.abs() > 400 && v.sign == _progress.sign);
     if (commit) HapticFeedback.selectionClick();
     _animateTo(commit ? _progress.sign : 0);
   }
 
-  /// Pulling past the end of the page turns it; scrolling inside works as usual.
-  bool _onScroll(ScrollNotification n, double height) {
-    if (n.depth != 0 || _turn.isAnimating) return false;
-    if (n is OverscrollNotification && n.dragDetails != null) {
-      _dragBy(n.overscroll / height * 1.4);
-    } else if (n is ScrollUpdateNotification && n.dragDetails != null && _progress != 0) {
-      _dragBy((n.scrollDelta ?? 0) / height * 1.4);
-    }
-    return false;
+  Future<void> _openWeek() async {
+    final key = await showWeekOverview(context, _key);
+    if (key != null && mounted) goTo(key);
   }
 
   Future<void> _pickDate() async {
@@ -132,27 +136,14 @@ class _BookScreenState extends State<BookScreen> with SingleTickerProviderStateM
 
     Widget page(String key) => RepaintBoundary(child: BookPage(dayKey: key, onPickDate: _pickDate));
 
-    // The turning page swings around its top edge, like a notepad page.
-    Widget flipping(Widget child, double t) => Transform(
-          alignment: Alignment.topCenter,
-          transform: Matrix4.identity()
-            ..setEntry(3, 2, 0.0012)
-            ..rotateX(t * math.pi / 2),
-          child: Stack(children: [
-            child,
-            Positioned.fill(
-              child: IgnorePointer(
-                // Matches the page card's margin and corners.
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(16),
-                    child: ColoredBox(color: Colors.black.withValues(alpha: t * 0.22)),
-                  ),
-                ),
-              ),
-            ),
-          ]),
+    final paper = Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surfaceContainerLow;
+    Widget curl(Widget front, Widget back, double t) => PageCurl(
+          front: front,
+          back: back,
+          t: t,
+          fromTop: _fromTop,
+          paper: paper,
+          inset: const EdgeInsets.all(4), // the page card's margin
         );
 
     Widget pages;
@@ -160,11 +151,11 @@ class _BookScreenState extends State<BookScreen> with SingleTickerProviderStateM
     if (_progress == 0 || n == null) {
       pages = page(_key);
     } else if (_progress > 0) {
-      // Next day: this page flips up and away, revealing the next one.
-      pages = Stack(children: [page(n), flipping(page(_key), _progress)]);
+      // Next day: this page curls away from its right corner.
+      pages = curl(page(_key), page(n), _progress);
     } else {
-      // Previous day: that page swings back down over this one.
-      pages = Stack(children: [page(_key), flipping(page(n), 1 + _progress)]);
+      // Previous day: that page uncurls back over this one.
+      pages = curl(page(n), page(_key), 1 + _progress);
     }
 
     return Scaffold(
@@ -172,8 +163,13 @@ class _BookScreenState extends State<BookScreen> with SingleTickerProviderStateM
         title: const Text('To-Do Book', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
         actions: [
           IconButton(
+            tooltip: 'Week view',
+            icon: const Icon(Icons.auto_stories_outlined),
+            onPressed: _openWeek,
+          ),
+          IconButton(
             tooltip: 'Previous day',
-            icon: const Icon(Icons.keyboard_arrow_up),
+            icon: const Icon(Icons.chevron_left),
             onPressed: () => goTo(addDays(_key, -1)),
           ),
           IconButton(
@@ -183,7 +179,7 @@ class _BookScreenState extends State<BookScreen> with SingleTickerProviderStateM
           ),
           IconButton(
             tooltip: 'Next day',
-            icon: const Icon(Icons.keyboard_arrow_down),
+            icon: const Icon(Icons.chevron_right),
             onPressed: () => goTo(addDays(_key, 1)),
           ),
         ],
@@ -199,17 +195,11 @@ class _BookScreenState extends State<BookScreen> with SingleTickerProviderStateM
       body: LayoutBuilder(
         builder: (context, c) => Padding(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-          child: Listener(
-            onPointerUp: (_) => _release(),
-            onPointerCancel: (_) => _release(),
-            child: NotificationListener<ScrollNotification>(
-              onNotification: (n) => _onScroll(n, c.maxHeight),
-              child: ScrollConfiguration(
-                // No stretch/glow at the page ends: pulling there turns the page.
-                behavior: ScrollConfiguration.of(context).copyWith(overscroll: false),
-                child: pages,
-              ),
-            ),
+          child: GestureDetector(
+            onHorizontalDragStart: (d) => _dragStart(d, c.maxHeight),
+            onHorizontalDragUpdate: (d) => _dragBy(-d.delta.dx / c.maxWidth * 1.1),
+            onHorizontalDragEnd: _release,
+            child: pages,
           ),
         ),
       ),
@@ -244,8 +234,6 @@ class BookPage extends StatelessWidget {
       child: Column(children: [
         Expanded(
           child: ListView(
-            // Always scrollable, so pulling past either end can turn the page.
-            physics: const AlwaysScrollableScrollPhysics(parent: ClampingScrollPhysics()),
             padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
             children: [
               InkWell(
@@ -329,15 +317,14 @@ class _TaskLine extends StatelessWidget {
     final muted = scheme.onSurfaceVariant;
     final sub = store.subjectById(task.subjectId);
     if (sub == null) return const SizedBox.shrink();
-    final isPast = store.isPastDay(dayKey);
     final progress = store.taskProgressMs(dayKey, task);
     final done = progress >= task.targetMs;
     final selected = store.isSelected(dayKey, task);
     final running = store.activeTimer?.taskId == task.id;
 
     Future<void> onTap() async {
-      // Today's and future tasks can be picked (to work ahead).
-      if (!isPast && !selected && !done) {
+      // Any unfinished task can be picked: a missed day, today or ahead.
+      if (!selected && !done) {
         store.selectTask(dayKey, task.id);
         return;
       }
@@ -457,7 +444,6 @@ Future<void> _taskActions(BuildContext context, String dayKey, PlanTask task) as
   final store = context.read<StudyStore>();
   final sub = store.subjectById(task.subjectId);
   if (sub == null) return;
-  final isPast = store.isPastDay(dayKey);
   final selected = store.isSelected(dayKey, task);
   final done = store.isTaskDone(dayKey, task);
   final choice = await showModalBottomSheet<String>(
@@ -470,7 +456,7 @@ Future<void> _taskActions(BuildContext context, String dayKey, PlanTask task) as
           subtitle: Text('Target ${formatDuration(task.targetMs)} · studied '
               '${formatDuration(store.taskProgressMs(dayKey, task))}'),
         ),
-        if (!isPast && !selected && !done)
+        if (!selected && !done)
           ListTile(
             leading: const Icon(Icons.push_pin_outlined),
             title: const Text('Pick this task'),
